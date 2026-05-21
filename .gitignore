@@ -1,0 +1,8 @@
+node_modules/
+*.log
+.logs/
+env.sh
+.project/env.sh
+account_balance.json
+scalper_state_*.json
+archive/

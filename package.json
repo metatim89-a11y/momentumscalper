@@ -1,0 +1,12 @@
+{
+  "name": "momentum-scalper-dashboard",
+  "version": "1.0.0",
+  "description": "Live dashboard for Momentum Scalper bot",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "ccxt": "^4.2.0"
+  }
+}

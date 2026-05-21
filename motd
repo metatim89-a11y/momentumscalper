@@ -1,0 +1,27 @@
+============================================================
+       MOMENTUM SCALPER MACHINE ENGINE — WORKSPACE v2.7.1
+============================================================
+ Core Philosophy: Keep It Stupid Simple. Envision First.
+
+ [SYSTEM CONTROL LIFECYCLE COMMAND]
+   • start      : Boots the scalper engine daemon in the background
+   • stop       : Completely terminates all running node instances safely
+   • restart    : Cycles the engine (kills active process, boots fresh)
+   • status     : Queries the system process table to verify active PID
+
+ [TELEMETRY & LOG MONITORING]
+   • dashboard  : Launches the LIVE web dashboard (ROI, PnL, Chart)
+   • check      : Inspects the active state ledger json for positions
+   • history    : Views the last 40 historical entry and exit marks
+   • logs       : Streams real-time, high-frequency engine runtime data
+
+ [AUDIT & ANALYSIS]
+   • node check_status.js         : Full system health snapshot
+   • node simulate_from_logs.js   : Replay log for balance verification
+   • node scalper_backtest.js     : 72-hour historical backtest
+   • node dump.js                 : Aggregate all source to dump.txt
+
+ System Guardrails: 3-Min Handshake | 0.35% SL | 0.75% TP
+ Logs Directory  : ./.logs/ (stderr, CaptainsLog.md, engine output)
+ Archive         : ./archive/ (versioned snapshots of every release)
+============================================================
