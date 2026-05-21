@@ -212,6 +212,29 @@ async function manageActivePosition(pair, liveBid, liveAsk, state) {
     let reason = '';
     let execPrice = 0;
 
+    const currentPrice = state.direction === 'LONG' ? liveBid : liveAsk;
+    const priceChangePct = state.direction === 'LONG' 
+        ? (currentPrice - state.entryPrice) / state.entryPrice 
+        : (state.entryPrice - currentPrice) / state.entryPrice;
+
+    // --- TRAILING LOGIC START ---
+    // If profit hits 0.40% and we haven't trailed yet, move SL to Break Even and push TP up
+    if (!state.trailingActive && priceChangePct >= 0.0040) {
+        const moveDistance = state.entryPrice * CONFIG.stopLossPercent; // The distance we are moving SL (to break even)
+        
+        state.stopLossPrice = state.entryPrice; // Move SL to Entry (Break Even)
+        state.takeProfitPrice = state.direction === 'LONG' 
+            ? state.takeProfitPrice + moveDistance 
+            : state.takeProfitPrice - moveDistance;
+        
+        state.trailingActive = true;
+        fs.writeFileSync(getStateFilePath(pair), JSON.stringify(state, null, 4));
+        
+        appendHistoryLog(`[TRAILING] ${pair} profit reached 0.4%. SL moved to Break Even ($${state.entryPrice}), TP moved to $${state.takeProfitPrice.toFixed(2)}`);
+        sendNotification(`🛡️ TRAILING ACTIVE: ${pair}`, `SL moved to Break Even\nNew TP: $${state.takeProfitPrice.toFixed(2)}`);
+    }
+    // --- TRAILING LOGIC END ---
+
     if (state.direction === 'LONG') {
         if (liveBid >= state.takeProfitPrice) { triggered = true; reason = 'TAKE_PROFIT'; execPrice = state.takeProfitPrice; }
         else if (liveBid <= state.stopLossPrice) { triggered = true; reason = 'STOP_LOSS'; execPrice = state.stopLossPrice; }
