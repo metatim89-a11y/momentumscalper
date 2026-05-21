@@ -12,7 +12,7 @@ const { execSync } = require('child_process');
 
 const CONFIG = {
     version: '2.7.1',
-    targetPairs: ['BTC/USDT', 'ETH/USDT', 'SOL/USDT'],
+    targetPairs: ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'DOGE/USDT', 'SHIB/USDT', 'XRP/USDT', 'ADA/USDT', 'LINK/USDT', 'MATIC/USDT', 'AVAX/USDT', 'LTC/USDT', 'NEAR/USDT', 'PEPE/USDT'],
     scanIntervalMs: 60000,
     blocksToAggregate: 3,
     startingBalanceUSDT: 1000.00,
@@ -28,7 +28,17 @@ const CONFIG = {
     precisionRules: {
         'BTC/USDT': { amount: 4, price: 2 },
         'ETH/USDT': { amount: 3, price: 2 },
-        'SOL/USDT': { amount: 2, price: 4 }
+        'SOL/USDT': { amount: 2, price: 4 },
+        'DOGE/USDT': { amount: 0, price: 4 },
+        'SHIB/USDT': { amount: 0, price: 8 },
+        'XRP/USDT': { amount: 1, price: 4 },
+        'ADA/USDT': { amount: 1, price: 4 },
+        'LINK/USDT': { amount: 2, price: 3 },
+        'MATIC/USDT': { amount: 1, price: 4 },
+        'AVAX/USDT': { amount: 2, price: 2 },
+        'LTC/USDT': { amount: 2, price: 2 },
+        'NEAR/USDT': { amount: 2, price: 3 },
+        'PEPE/USDT': { amount: 0, price: 8 }
     }
 };
 
@@ -59,13 +69,16 @@ function releaseBalanceLock() {
 
 ensureLogsDir();
 
-const priceStreams = { 'BTC/USDT': [], 'ETH/USDT': [], 'SOL/USDT': [] };
-const scanBuffers = { 'BTC/USDT': [], 'ETH/USDT': [], 'SOL/USDT': [] };
-const strategicMatrices = {
-    'BTC/USDT': { upper: 0, sma: 0, lower: 0 },
-    'ETH/USDT': { upper: 0, sma: 0, lower: 0 },
-    'SOL/USDT': { upper: 0, sma: 0, lower: 0 }
-};
+const priceStreams = {};
+const scanBuffers = {};
+const strategicMatrices = {};
+
+// Initialize data structures for all target pairs
+CONFIG.targetPairs.forEach(pair => {
+    priceStreams[pair] = [];
+    scanBuffers[pair] = [];
+    strategicMatrices[pair] = { upper: 0, sma: 0, lower: 0 };
+});
 
 function getStateFilePath(pair) {
     return `./scalper_state_${pair.replace('/', '-')}.json`;
