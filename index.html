@@ -463,6 +463,17 @@
                             <span class="stat-label">Size</span>
                             <span class="stat-value">${pos.contractSize}</span>
                         </div>
+                        <div class="stat-row" style="margin-top: 1rem; border-top: 1px solid var(--border); padding-top: 1rem;">
+                            <span class="stat-label">Exit Progress</span>
+                        </div>
+                        <div style="height: 8px; background: #334155; border-radius: 4px; margin: 0.5rem 0; overflow: hidden; display: flex;">
+                            <div style="width: ${Math.min(100, (distToSl / (distToTp + distToSl)) * 100)}%; background: var(--danger); opacity: 0.6;"></div>
+                            <div style="width: ${Math.min(100, (distToTp / (distToTp + distToSl)) * 100)}%; background: var(--success); opacity: 0.6;"></div>
+                        </div>
+                        <div class="stat-row" style="font-size: 0.75rem;">
+                            <span style="color: var(--danger)">SL: ${((distToSl / pos.currentPrice) * 100).toFixed(2)}%</span>
+                            <span style="color: var(--success)">TP: ${((distToTp / pos.currentPrice) * 100).toFixed(2)}%</span>
+                        </div>
                         <div class="stat-row" style="margin-top: 1rem; border-top: 1px solid var(--border); padding-top: 0.5rem;">
                             <span class="stat-label">Opened</span>
                             <span class="stat-value" style="font-size: 0.75rem; color: var(--text-secondary)">${pos.timestamp}</span>
