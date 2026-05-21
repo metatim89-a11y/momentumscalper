@@ -142,6 +142,45 @@ const server = http.createServer(async (req, res) => {
 
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(data));
+    } else if (req.url.startsWith('/api/candles/')) {
+        const pair = req.url.split('/api/candles/')[1].replace('-', '/');
+        try {
+            const ohlcv = await exchange.fetchOHLCV(pair, '1m', undefined, 12);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(ohlcv.map(c => ({ time: c[0], open: c[1], high: c[2], low: c[3], close: c[4], volume: c[5] }))));
+        } catch (e) {
+            res.writeHead(500);
+            res.end('Error fetching candles');
+        }
+    } else if (req.url === '/api/control') {
+        let body = '';
+        req.on('data', chunk => { body += chunk; });
+        req.on('end', () => {
+            const { action } = JSON.parse(body);
+            if (action === 'start') {
+                require('child_process').exec('node scalper_machine.js > .logs/scalper_machine.log 2>&1 &');
+            } else if (action === 'restart') {
+                require('child_process').exec('pkill -f "node scalper_machine.js" && node scalper_machine.js > .logs/scalper_machine.log 2>&1 &');
+            } else if (action === 'buy' || action === 'sell') {
+                const pair = JSON.parse(body).pair.replace('/', '-');
+                fs.writeFileSync(`manual_trade_${pair}.json`, JSON.stringify({ action: action, timestamp: Date.now() }));
+                res.writeHead(200);
+                res.end(JSON.stringify({ status: `Manual ${action} Command Written` }));
+                return;
+            } else if (action === 'exit') {
+                const pair = JSON.parse(body).pair.replace('/', '-');
+                fs.writeFileSync(`manual_exit_${pair}.json`, JSON.stringify({ exit: true }));
+                res.writeHead(200);
+                res.end(JSON.stringify({ status: 'Exit Command Written' }));
+                return;
+            } else if (action === 'status') {
+                const balData = JSON.parse(fs.readFileSync('account_balance.json', 'utf8'));
+                const timestamp = new Date().toLocaleTimeString();
+                require('child_process').exec(`termux-notification -t "Momentum Scalper Status" -c "Balance: $${balData.balance.toFixed(2)} at ${timestamp}" --id scalper_status --priority high`);
+            }
+            res.writeHead(200);
+            res.end(JSON.stringify({ status: 'Command Executed' }));
+        });
     } else {
         res.writeHead(404);
         res.end('Not Found');

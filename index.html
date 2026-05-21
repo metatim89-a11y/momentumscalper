@@ -5,6 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Momentum Scalper Dashboard</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
+    <script src="https://cdn.jsdelivr.net/npm/luxon@3.0.0/build/global/luxon.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-luxon@1.0.0"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-chart-financial@0.1.1"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=Fira+Code&display=swap" rel="stylesheet">
@@ -150,6 +153,43 @@
             margin-bottom: 2.5rem;
         }
 
+        .page-layout {
+            display: grid;
+            grid-template-columns: 200px 1fr;
+            gap: 2rem;
+        }
+        .sidebar {
+            background: var(--card-bg);
+            padding: 1.5rem;
+            border-radius: 0.75rem;
+            border: 1px solid var(--border);
+            height: fit-content;
+        }
+        .sidebar h3 {
+            font-size: 0.875rem;
+            text-transform: uppercase;
+            color: var(--text-secondary);
+            margin-bottom: 1rem;
+        }
+        .coin-list {
+            list-style: none;
+        }
+        .coin-item {
+            padding: 0.5rem;
+            color: var(--text-primary);
+            font-weight: 600;
+            border-bottom: 1px solid var(--border);
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        .coin-item:hover {
+            background: rgba(56, 189, 248, 0.1);
+        }
+        .coin-item.active {
+            color: var(--accent);
+            border-left: 3px solid var(--accent);
+        }
+
         .card {
             background: var(--card-bg);
             border-radius: 0.75rem;
@@ -249,12 +289,40 @@
             </div>
         </header>
 
-        <section>
-            <h2 style="margin-bottom: 1rem; font-size: 1.25rem;">Performance Chart</h2>
-            <div class="chart-container">
-                <canvas id="performanceChart"></canvas>
-            </div>
-        </section>
+        <div class="page-layout">
+            <aside class="sidebar">
+                <h3>Controls</h3>
+                <div style="display: flex; flex-direction: column; gap: 0.5rem; margin-bottom: 2rem;">
+                    <button onclick="controlBot('start')" style="background: var(--success); color: white; border: none; padding: 0.5rem; border-radius: 0.25rem; cursor: pointer;">Start Bot</button>
+                    <button onclick="controlBot('restart')" style="background: var(--accent); color: white; border: none; padding: 0.5rem; border-radius: 0.25rem; cursor: pointer;">Restart Bot</button>
+                </div>
+
+                <h3>Live Stats</h3>
+                <div id="sidebar-stats" style="margin-bottom: 2rem; font-size: 0.85rem; color: var(--text-secondary);">
+                    <div class="stat-row"><span>Balance:</span><b id="sb-balance" style="color:var(--text-primary)">$0.00</b></div>
+                    <div class="stat-row"><span>Active Pos:</span><b id="sb-pos" style="color:var(--text-primary)">0</b></div>
+                </div>
+                <button onclick="sendManualStatus()" style="width:100%; background: var(--border); color: var(--text-primary); border: none; padding: 0.5rem; border-radius: 0.25rem; cursor: pointer; margin-bottom: 2rem;">Notify Status</button>
+
+                <h3>Tradeable Pairs</h3>
+                <ul class="coin-list" id="coin-list">
+                    <li class="coin-item active" data-pair="ALL">All Pairs</li>
+                    <li class="coin-item" data-pair="BTC/USDT">BTC/USDT</li>
+                    <li class="coin-item" data-pair="ETH/USDT">ETH/USDT</li>
+                    <li class="coin-item" data-pair="SOL/USDT">SOL/USDT</li>
+                </ul>
+            </aside>
+            <main>
+                <section>
+                    <h2 style="margin-bottom: 1rem; font-size: 1.25rem;">Performance Chart</h2>
+                    <div style="display: flex; gap: 0.5rem; margin-bottom: 0.5rem;">
+                        <button onclick="manualTrade('BUY')" style="background: var(--success); color: white; border: none; padding: 0.4rem 0.8rem; border-radius: 0.25rem; cursor: pointer; font-weight: 600;">Manual BUY</button>
+                        <button onclick="manualTrade('SELL')" style="background: var(--danger); color: white; border: none; padding: 0.4rem 0.8rem; border-radius: 0.25rem; cursor: pointer; font-weight: 600;">Manual SELL</button>
+                    </div>
+                    <div class="chart-container">
+                        <canvas id="performanceChart"></canvas>
+                    </div>
+                </section>
 
         <section>
             <h2 style="margin-bottom: 1rem; font-size: 1.25rem;">Daily Bot Activity</h2>
@@ -308,29 +376,127 @@
                 <!-- History will be injected here -->
             </div>
         </section>
+        </main>
+        </div>
     </div>
 
     <script>
         let performanceChart = null;
+        let currentPair = 'ALL';
+        let globalData = null;
+
+        document.getElementById('coin-list').addEventListener('click', async (e) => {
+            if (e.target.classList.contains('coin-item')) {
+                document.querySelectorAll('.coin-item').forEach(el => el.classList.remove('active'));
+                e.target.classList.add('active');
+                currentPair = e.target.dataset.pair;
+                if (currentPair !== 'ALL') {
+                    renderPairChart(currentPair);
+                } else {
+                    fetchData();
+                }
+            }
+        });
+
+        async function renderPairChart(pair) {
+            try {
+                const response = await fetch(`/api/candles/${pair.replace('/', '-')}`);
+                const candles = await response.json();
+                
+                const ctx = document.getElementById('performanceChart').getContext('2d');
+                if (performanceChart) performanceChart.destroy();
+
+                performanceChart = new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels: candles.slice(-12).map(c => new Date(c.time).toLocaleTimeString()),
+                        datasets: [{
+                            label: `${pair} Price`,
+                            data: candles.slice(-12).map(c => c.close),
+                            borderColor: '#38bdf8',
+                            fill: false,
+                            tension: 0.1
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        scales: {
+                            y: { grid: { color: '#334155' } }
+                        }
+                    }
+                });
+            } catch (error) {
+                console.error('Error rendering pair chart:', error);
+            }
+        }
+
+        async function manualTrade(action) {
+            if (currentPair === 'ALL') {
+                alert('Please select a specific pair to trade.');
+                return;
+            }
+            if (!confirm(`Are you sure you want to ${action} ${currentPair}?`)) return;
+
+            try {
+                await fetch('/api/control', {
+                    method: 'POST',
+                    body: JSON.stringify({ action: action.toLowerCase(), pair: currentPair })
+                });
+                alert(`Manual ${action} triggered for ${currentPair}`);
+                fetchData();
+            } catch (error) {
+                console.error('Error triggering manual trade:', error);
+            }
+        }
+
+        async function manualExit(pair) {
+            try {
+                await fetch('/api/control', {
+                    method: 'POST',
+                    body: JSON.stringify({ action: 'exit', pair })
+                });
+                alert(`Manual exit triggered for ${pair}`);
+                fetchData();
+            } catch (error) {
+                console.error('Error exiting trade:', error);
+            }
+        }
 
         async function fetchData() {
             try {
                 const response = await fetch('/api/data');
-                const data = await response.json();
-                updateUI(data);
+                globalData = await response.json();
+                updateUI(globalData);
             } catch (error) {
                 console.error('Error fetching data:', error);
+            }
+        }
+
+        async function controlBot(action) {
+            try {
+                await fetch('/api/control', {
+                    method: 'POST',
+                    body: JSON.stringify({ action })
+                });
+                alert(`Bot ${action} command sent.`);
+            } catch (error) {
+                console.error('Error controlling bot:', error);
             }
         }
 
         function updateChart(trades, initialBalance) {
             const ctx = document.getElementById('performanceChart').getContext('2d');
             
-            const labels = ['Start', ...trades.map(t => t.time)];
+            // Filter trades by selected pair (or all)
+            let filteredTrades = currentPair === 'ALL' ? trades : trades.filter(t => t.pair === currentPair);
+            const displayTrades = filteredTrades.slice(-12);
+
+            const labels = ['Start', ...displayTrades.map(t => t.time)];
             const dataPoints = [initialBalance];
             let currentBalance = initialBalance;
             
-            trades.forEach(t => {
+            displayTrades.forEach(t => {
                 if (t.balance) {
                     currentBalance = t.balance;
                 } else {
@@ -340,47 +506,59 @@
             });
 
             if (performanceChart) {
-                performanceChart.data.labels = labels;
-                performanceChart.data.datasets[0].data = dataPoints;
-                performanceChart.update();
-            } else {
-                performanceChart = new Chart(ctx, {
-                    type: 'line',
-                    data: {
-                        labels: labels,
-                        datasets: [{
-                            label: 'Account Balance (USDT)',
-                            data: dataPoints,
-                            borderColor: '#38bdf8',
-                            backgroundColor: 'rgba(56, 189, 248, 0.1)',
-                            borderWidth: 2,
-                            fill: true,
-                            tension: 0.3,
-                            pointRadius: 2,
-                            pointBackgroundColor: '#38bdf8'
-                        }]
+                performanceChart.destroy();
+            }
+            
+            performanceChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Account Balance (USDT)',
+                        data: dataPoints,
+                        borderColor: '#38bdf8',
+                        backgroundColor: 'rgba(56, 189, 248, 0.1)',
+                        borderWidth: 2,
+                        fill: true,
+                        tension: 0.3,
+                        pointRadius: 2,
+                        pointBackgroundColor: '#38bdf8'
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: false }
                     },
-                    options: {
-                        responsive: true,
-                        maintainAspectRatio: false,
-                        plugins: {
-                            legend: { display: false }
-                        },
-                        scales: {
-                            x: {
-                                display: false
-                            },
-                            y: {
-                                grid: { color: '#334155' },
-                                ticks: { color: '#94a3b8' }
-                            }
+                    scales: {
+                        x: { display: true },
+                        y: {
+                            grid: { color: '#334155' },
+                            ticks: { color: '#94a3b8' }
                         }
                     }
+                }
+            });
+        }
+
+        async function sendManualStatus() {
+            try {
+                await fetch('/api/control', {
+                    method: 'POST',
+                    body: JSON.stringify({ action: 'status' })
                 });
+                alert('Status notification sent.');
+            } catch (error) {
+                console.error('Error sending status:', error);
             }
         }
 
         function updateUI(data) {
+            // Sidebar Stats
+            document.getElementById('sb-balance').textContent = `$${data.balance.toFixed(2)}`;
+            document.getElementById('sb-pos').textContent = data.positions.length;
+
             // Update Balance
             document.getElementById('balance-display').textContent = `$${data.balance.toFixed(2)}`;
 
@@ -418,16 +596,22 @@
 
             // Update Trades Table
             const tradesBody = document.getElementById('trades-body');
-            tradesBody.innerHTML = data.trades.slice().reverse().map(trade => `
-                <tr class="${trade.pnl >= 0 ? 'row-win' : 'row-loss'}">
-                    <td style="color: var(--text-secondary); font-size: 0.75rem;">${trade.time}</td>
-                    <td style="font-weight: 700; color: var(--accent);">${trade.pair}</td>
-                    <td><span style="font-size: 0.75rem; padding: 0.2rem 0.5rem; border-radius: 0.25rem; background: rgba(148, 163, 184, 0.1); border: 1px solid rgba(148, 163, 184, 0.2);">${trade.reason}</span></td>
-                    <td class="${trade.pnl >= 0 ? 'pnl-positive' : 'pnl-negative'}">${trade.pnl >= 0 ? '▲' : '▼'} $${Math.abs(trade.pnl).toFixed(2)}</td>
-                    <td style="font-weight: 700; color: var(--text-primary);">$${trade.balance ? trade.balance.toFixed(2) : '---'}</td>
-                </tr>
-            `).join('');
-
+            tradesBody.innerHTML = data.trades.slice().reverse().map(trade => {
+                const isManual = trade.reason === 'MANUAL_EXIT';
+                return `
+                    <tr class="${trade.pnl >= 0 ? 'row-win' : 'row-loss'}">
+                        <td style="color: var(--text-secondary); font-size: 0.75rem;">${trade.time}</td>
+                        <td style="font-weight: 700; color: var(--accent);">${trade.pair}</td>
+                        <td>
+                            <span style="font-size: 0.75rem; padding: 0.2rem 0.5rem; border-radius: 0.25rem; background: ${isManual ? 'rgba(56, 189, 248, 0.2)' : 'rgba(148, 163, 184, 0.1)'}; border: 1px solid ${isManual ? 'var(--accent)' : 'rgba(148, 163, 184, 0.2)'}; color: ${isManual ? 'var(--accent)' : 'inherit'}; font-weight: ${isManual ? '600' : '400'}">
+                                ${trade.reason}
+                            </span>
+                        </td>
+                        <td class="${trade.pnl >= 0 ? 'pnl-positive' : 'pnl-negative'}">${trade.pnl >= 0 ? '▲' : '▼'} $${Math.abs(trade.pnl).toFixed(2)}</td>
+                        <td style="font-weight: 700; color: var(--text-primary);">$${trade.balance ? trade.balance.toFixed(2) : '---'}</td>
+                    </tr>
+                `
+            }).join('');
             // Update Positions
             const grid = document.getElementById('positions-grid');
             if (data.positions.length === 0) {
@@ -471,9 +655,10 @@
                             <div style="width: ${Math.min(100, (distToTp / (distToTp + distToSl)) * 100)}%; background: var(--success); opacity: 0.6;"></div>
                         </div>
                         <div class="stat-row" style="font-size: 0.75rem;">
-                            <span style="color: var(--danger)">SL: ${((distToSl / pos.currentPrice) * 100).toFixed(2)}%</span>
-                            <span style="color: var(--success)">TP: ${((distToTp / pos.currentPrice) * 100).toFixed(2)}%</span>
+                            <span style="color: var(--danger)">SL: ${((distToSl / pos.currentPrice) * 100).toFixed(2)}% ($${(pos.contractSize * distToSl).toFixed(2)})</span>
+                            <span style="color: var(--success)">TP: ${((distToTp / pos.currentPrice) * 100).toFixed(2)}% ($${(pos.contractSize * distToTp).toFixed(2)})</span>
                         </div>
+                        <button onclick="manualExit('${pos.pair}')" style="margin-top:1rem; width: 100%; background: var(--danger); color: white; border: none; padding: 0.5rem; border-radius: 0.25rem; cursor: pointer;">Exit Position</button>
                         <div class="stat-row" style="margin-top: 1rem; border-top: 1px solid var(--border); padding-top: 0.5rem;">
                             <span class="stat-label">Opened</span>
                             <span class="stat-value" style="font-size: 0.75rem; color: var(--text-secondary)">${pos.timestamp}</span>
