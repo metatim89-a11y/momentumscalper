@@ -5,10 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Momentum Scalper Dashboard</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
-    <script src="https://cdn.jsdelivr.net/npm/luxon@3.0.0/build/global/luxon.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-luxon@1.0.0"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chartjs-chart-financial@0.1.1"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=Fira+Code&display=swap" rel="stylesheet">
     <style>
@@ -21,6 +17,11 @@
             --success: #22c55e;
             --danger: #ef4444;
             --border: #334155;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to   { opacity: 1; transform: translateY(0); }
         }
 
         * {
@@ -250,8 +251,23 @@
 
         .history-item:last-child { border-bottom: none; }
 
-        .tag-order { color: var(--accent); }
-        .tag-closed { color: var(--success); }
+        .side-by-side {
+            display: grid;
+            grid-template-columns: 1.2fr 1fr;
+            gap: 1.5rem;
+            margin-bottom: 2.5rem;
+        }
+
+        .performance-container {
+            background: var(--card-bg);
+            border-radius: 0.75rem;
+            border: 1px solid var(--border);
+            padding: 1.5rem;
+            margin-bottom: 2.5rem;
+        }
+
+        .tag-order { background: #38bdf822; color: #38bdf8; padding: 0.1rem 0.3rem; border-radius: 0.25rem; font-weight: 700; margin-right: 0.4rem; font-size: 0.7rem; }
+        .tag-closed { background: #f59e0b22; color: #f59e0b; padding: 0.1rem 0.3rem; border-radius: 0.25rem; font-weight: 700; margin-right: 0.4rem; font-size: 0.7rem; }
         .tag-error { color: var(--danger); }
 
         @media (max-width: 768px) {
@@ -294,6 +310,7 @@
                 <h3>Controls</h3>
                 <div style="display: flex; flex-direction: column; gap: 0.5rem; margin-bottom: 2rem;">
                     <button onclick="controlBot('start')" style="background: var(--success); color: white; border: none; padding: 0.5rem; border-radius: 0.25rem; cursor: pointer;">Start Bot</button>
+                    <button onclick="controlBot('stop')" style="background: var(--danger); color: white; border: none; padding: 0.5rem; border-radius: 0.25rem; cursor: pointer;">Stop Bot</button>
                     <button onclick="controlBot('restart')" style="background: var(--accent); color: white; border: none; padding: 0.5rem; border-radius: 0.25rem; cursor: pointer;">Restart Bot</button>
                 </div>
 
@@ -302,6 +319,7 @@
                     <div class="stat-row"><span>Balance:</span><b id="sb-balance" style="color:var(--text-primary)">$0.00</b></div>
                     <div class="stat-row"><span>Active Pos:</span><b id="sb-pos" style="color:var(--text-primary)">0</b></div>
                 </div>
+                <button onclick="controlBot('reset')" style="width:100%; background: var(--danger); color: white; border: none; padding: 0.5rem; border-radius: 0.25rem; cursor: pointer; margin-bottom: 1rem;">Reset Data</button>
                 <button onclick="sendManualStatus()" style="width:100%; background: var(--border); color: var(--text-primary); border: none; padding: 0.5rem; border-radius: 0.25rem; cursor: pointer; margin-bottom: 2rem;">Notify Status</button>
 
                 <h3>Tradeable Pairs</h3>
@@ -310,19 +328,97 @@
                     <li class="coin-item" data-pair="BTC/USDT">BTC/USDT</li>
                     <li class="coin-item" data-pair="ETH/USDT">ETH/USDT</li>
                     <li class="coin-item" data-pair="SOL/USDT">SOL/USDT</li>
+                    <li class="coin-item" data-pair="ADA/USDT">ADA/USDT</li>
+                    <li class="coin-item" data-pair="DOGE/USDT">DOGE/USDT</li>
                 </ul>
             </aside>
             <main>
                 <section>
-                    <h2 style="margin-bottom: 1rem; font-size: 1.25rem;">Performance Chart</h2>
-                    <div style="display: flex; gap: 0.5rem; margin-bottom: 0.5rem;">
-                        <button onclick="manualTrade('BUY')" style="background: var(--success); color: white; border: none; padding: 0.4rem 0.8rem; border-radius: 0.25rem; cursor: pointer; font-weight: 600;">Manual BUY</button>
-                        <button onclick="manualTrade('SELL')" style="background: var(--danger); color: white; border: none; padding: 0.4rem 0.8rem; border-radius: 0.25rem; cursor: pointer; font-weight: 600;">Manual SELL</button>
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.75rem; flex-wrap:wrap; gap:0.5rem;">
+                        <h2 style="font-size:1.25rem;" id="chart-title">Select a pair to view chart</h2>
+                        <div style="display:flex; gap:0.5rem; align-items:center;">
+                            <select id="tf-selector" onchange="loadAndDrawChart(currentPair)" style="background:var(--card-bg); color:var(--text-primary); border:1px solid var(--border); padding:0.3rem; border-radius:0.3rem;">
+                                <option value="1m">1m</option><option value="5m">5m</option><option value="15m">15m</option><option value="30m">30m</option><option value="1h">1h</option>
+                            </select>
+                            <button onclick="manualTrade('SHORT')" style="background:var(--danger); color:white; border:none; padding:0.45rem 1rem; border-radius:0.35rem; cursor:pointer; font-weight:700; font-size:0.85rem;">📉 SHORT</button>
+                            <button onclick="manualTrade('LONG')"  style="background:var(--success); color:white; border:none; padding:0.45rem 1rem; border-radius:0.35rem; cursor:pointer; font-weight:700; font-size:0.85rem;">📈 LONG</button>
+                        </div>
                     </div>
-                    <div class="chart-container">
-                        <canvas id="performanceChart"></canvas>
+                    <!-- Legend -->
+                    <div id="chart-legend" style="display:none; gap:1rem; margin-bottom:0.5rem; font-size:0.72rem; flex-wrap:wrap;">
+                        <span style="color:#22d3ee;">─── SMA(16)</span>
+                        <span style="color:#38bdf8;">─── SMA(26)</span>
+                        <span style="color:#818cf8;">─── SMA(39)</span>
+                        <span style="color:#f59e0b;">─── Upper Band (1.2σ)</span>
+                        <span style="color:#f59e0b;">─── Lower Band (1.2σ)</span>
+                        <span style="color:rgba(245,158,11,0.15);">▓ Band Zone</span>
+                        <span style="color:#22c55e;">▓ Green = Bullish candle</span>
+                        <span style="color:#ef4444;">▓ Red = Bearish candle</span>
+                    </div>
+                    <div class="chart-container" style="position:relative;">
+                        <canvas id="candleChart"></canvas>
+                        <div id="chart-placeholder" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--text-secondary);font-size:0.9rem;">
+                            ← Select a pair from the sidebar
+                        </div>
                     </div>
                 </section>
+
+        <div class="side-by-side">
+            <section style="margin-bottom: 0;">
+                <h2 style="margin-bottom: 1rem; font-size: 1.25rem;">Active Positions</h2>
+                <div id="positions-grid" style="display: grid; grid-template-columns: 1fr; gap: 1rem;">
+                    <!-- Positions will be injected here -->
+                </div>
+            </section>
+
+            <section class="history-section" style="max-height: 600px; overflow-y: auto;">
+                <h2 style="margin-bottom: 1rem; font-size: 1.25rem;">Recent Activity</h2>
+                <div class="history-list" id="history-list">
+                    <!-- History will be injected here -->
+                </div>
+            </section>
+        </div>
+
+        <section class="performance-container">
+            <h2 style="margin-bottom: 1rem; font-size: 1.25rem;">24-Hour Token Performance</h2>
+            <div class="trades-table-container" style="margin-bottom: 0;">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Token</th>
+                            <th>Net PnL</th>
+                            <th>Trades</th>
+                            <th>Win Rate</th>
+                            <th>Best Signal</th>
+                        </tr>
+                    </thead>
+                    <tbody id="performance-body">
+                        <!-- Performance data will be injected here -->
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <section>
+            <h2 style="margin-bottom: 1rem; font-size: 1.25rem;">Past Trades</h2>
+            <div class="trades-table-container">
+                <table id="trades-table">
+                    <thead>
+                        <tr>
+                            <th>Time</th>
+                            <th>Pair</th>
+                            <th>Signal</th>
+                            <th>Reason</th>
+                            <th>PnL</th>
+                            <th>Balance</th>
+                        </tr>
+                    </thead>
+                    <tbody id="trades-body">
+                        <!-- Trades will be injected here -->
+                    </tbody>
+                </table>
+            </div>
+        </section>
 
         <section>
             <h2 style="margin-bottom: 1rem; font-size: 1.25rem;">Daily Bot Activity</h2>
@@ -342,219 +438,287 @@
                 </table>
             </div>
         </section>
-
-        <section>
-            <h2 style="margin-bottom: 1rem; font-size: 1.25rem;">Active Positions</h2>
-            <div class="grid" id="positions-grid">
-                <!-- Positions will be injected here -->
-            </div>
-        </section>
-
-        <section>
-            <h2 style="margin-bottom: 1rem; font-size: 1.25rem;">Past Trades</h2>
-            <div class="trades-table-container">
-                <table id="trades-table">
-                    <thead>
-                        <tr>
-                            <th>Time</th>
-                            <th>Pair</th>
-                            <th>Reason</th>
-                            <th>PnL</th>
-                            <th>Balance</th>
-                        </tr>
-                    </thead>
-                    <tbody id="trades-body">
-                        <!-- Trades will be injected here -->
-                    </tbody>
-                </table>
-            </div>
-        </section>
-
-        <section class="history-section">
-            <h2 style="margin-bottom: 1rem; font-size: 1.25rem;">Recent Activity</h2>
-            <div class="history-list" id="history-list">
-                <!-- History will be injected here -->
-            </div>
-        </section>
         </main>
         </div>
     </div>
 
     <script>
-        let performanceChart = null;
         let currentPair = 'ALL';
-        let globalData = null;
+        let globalData  = null;
+        let chartData   = null;
+        let chartInterval = null;
 
+        // ── Pair selector ──────────────────────────────────────────────────
         document.getElementById('coin-list').addEventListener('click', async (e) => {
-            if (e.target.classList.contains('coin-item')) {
-                document.querySelectorAll('.coin-item').forEach(el => el.classList.remove('active'));
-                e.target.classList.add('active');
-                currentPair = e.target.dataset.pair;
-                if (currentPair !== 'ALL') {
-                    renderPairChart(currentPair);
-                } else {
-                    fetchData();
-                }
+            if (!e.target.classList.contains('coin-item')) return;
+            document.querySelectorAll('.coin-item').forEach(el => el.classList.remove('active'));
+            e.target.classList.add('active');
+            currentPair = e.target.dataset.pair;
+            if (currentPair !== 'ALL') {
+                document.getElementById('chart-title').textContent = `${currentPair} — 1m Candles`;
+                document.getElementById('chart-legend').style.display = 'flex';
+                document.getElementById('chart-placeholder').style.display = 'none';
+                await loadAndDrawChart(currentPair);
+                // Refresh chart every 15s
+                clearInterval(chartInterval);
+                chartInterval = setInterval(() => loadAndDrawChart(currentPair), 15000);
+            } else {
+                document.getElementById('chart-title').textContent = 'Select a pair to view chart';
+                document.getElementById('chart-legend').style.display = 'none';
+                document.getElementById('chart-placeholder').style.display = 'flex';
+                clearInterval(chartInterval);
             }
         });
 
-        async function renderPairChart(pair) {
+        // ── Load candles + indicators from server ──────────────────────────
+        async function loadAndDrawChart(pair) {
+            if (pair === 'ALL') return;
+            const tf = document.getElementById('tf-selector').value;
             try {
-                const response = await fetch(`/api/candles/${pair.replace('/', '-')}`);
-                const candles = await response.json();
-                
-                const ctx = document.getElementById('performanceChart').getContext('2d');
-                if (performanceChart) performanceChart.destroy();
-
-                performanceChart = new Chart(ctx, {
-                    type: 'line',
-                    data: {
-                        labels: candles.slice(-12).map(c => new Date(c.time).toLocaleTimeString()),
-                        datasets: [{
-                            label: `${pair} Price`,
-                            data: candles.slice(-12).map(c => c.close),
-                            borderColor: '#38bdf8',
-                            fill: false,
-                            tension: 0.1
-                        }]
-                    },
-                    options: {
-                        responsive: true,
-                        maintainAspectRatio: false,
-                        scales: {
-                            y: { grid: { color: '#334155' } }
-                        }
-                    }
-                });
-            } catch (error) {
-                console.error('Error rendering pair chart:', error);
+                const res  = await fetch(`/api/candles/${pair.replace('/', '-')}?tf=${tf}`);
+                const json = await res.json();
+                chartData  = json;
+                document.getElementById('chart-title').textContent = `${pair} — ${tf} Candles`;
+                drawCandleChart(json.candles, json.indicators);
+            } catch (e) {
+                console.error('Chart load error:', e);
             }
+        }
+
+        // ── Custom OHLC candlestick canvas renderer ────────────────────────
+        function drawCandleChart(candles, indicators) {
+            const canvas  = document.getElementById('candleChart');
+            const ctx     = canvas.getContext('2d');
+            const dpr     = window.devicePixelRatio || 1;
+            const rect    = canvas.parentElement.getBoundingClientRect();
+            const W       = rect.width  || 800;
+            const H       = rect.height || 300;
+
+            canvas.width  = W * dpr;
+            canvas.height = H * dpr;
+            canvas.style.width  = W + 'px';
+            canvas.style.height = H + 'px';
+            ctx.scale(dpr, dpr);
+            ctx.clearRect(0, 0, W, H);
+
+            const PAD_L = 12, PAD_R = 60, PAD_T = 14, PAD_B = 28;
+            const chartW = W - PAD_L - PAD_R;
+            const chartH = H - PAD_T - PAD_B;
+
+            // Price range
+            const allPrices = candles.flatMap(c => [c.high, c.low]);
+            const inds = indicators.filter(i => i.upper !== null);
+            if (inds.length) allPrices.push(...inds.flatMap(i => [i.upper, i.lower]));
+            const minP = Math.min(...allPrices);
+            const maxP = Math.max(...allPrices);
+            const range = maxP - minP || 1;
+            const pad   = range * 0.05;
+            const lo    = minP - pad;
+            const hi    = maxP + pad;
+
+            const xOf = (i) => PAD_L + (i / (candles.length - 1)) * chartW;
+            const yOf = (p) => PAD_T + (1 - (p - lo) / (hi - lo)) * chartH;
+
+            // ── Band fill ─────────────────────────────────────────────────
+            ctx.beginPath();
+            inds.forEach((ind, i) => {
+                const ci = indicators.indexOf(ind);
+                if (i === 0) ctx.moveTo(xOf(ci), yOf(ind.upper));
+                else ctx.lineTo(xOf(ci), yOf(ind.upper));
+            });
+            [...inds].reverse().forEach((ind) => {
+                const ci = indicators.indexOf(ind);
+                ctx.lineTo(xOf(ci), yOf(ind.lower));
+            });
+            ctx.closePath();
+            ctx.fillStyle = 'rgba(245,158,11,0.07)';
+            ctx.fill();
+
+            // ── Upper band ────────────────────────────────────────────────
+            ctx.beginPath();
+            inds.forEach((ind, i) => {
+                const ci = indicators.indexOf(ind);
+                i === 0 ? ctx.moveTo(xOf(ci), yOf(ind.upper)) : ctx.lineTo(xOf(ci), yOf(ind.upper));
+            });
+            ctx.strokeStyle = 'rgba(245,158,11,0.7)';
+            ctx.lineWidth   = 1;
+            ctx.setLineDash([4, 3]);
+            ctx.stroke();
+
+            // ── Lower band ────────────────────────────────────────────────
+            ctx.beginPath();
+            inds.forEach((ind, i) => {
+                const ci = indicators.indexOf(ind);
+                i === 0 ? ctx.moveTo(xOf(ci), yOf(ind.lower)) : ctx.lineTo(xOf(ci), yOf(ind.lower));
+            });
+            ctx.strokeStyle = 'rgba(245,158,11,0.7)';
+            ctx.stroke();
+            ctx.setLineDash([]);
+
+            // ── SMA lines ──────────────────────────────────────────────────
+            const drawSma = (key, color, width) => {
+                ctx.beginPath();
+                let started = false;
+                indicators.forEach((ind) => {
+                    const ci = indicators.indexOf(ind);
+                    if (ind[key] === null) return;
+                    if (!started) { ctx.moveTo(xOf(ci), yOf(ind[key])); started = true; }
+                    else ctx.lineTo(xOf(ci), yOf(ind[key]));
+                });
+                ctx.strokeStyle = color;
+                ctx.lineWidth   = width;
+                ctx.stroke();
+            };
+
+            drawSma('smaSlow', '#818cf8', 1);
+            drawSma('smaMed',  '#38bdf8', 1.5);
+            drawSma('smaFast', '#22d3ee', 1);
+
+            // ── Candles ───────────────────────────────────────────────────
+            const candleW = Math.max(2, (chartW / candles.length) * 0.7);
+            candles.forEach((c, i) => {
+                const x      = xOf(i);
+                const isUp   = c.close >= c.open;
+                const color  = isUp ? '#22c55e' : '#ef4444';
+                const bodyT  = yOf(Math.max(c.open, c.close));
+                const bodyB  = yOf(Math.min(c.open, c.close));
+                const bodyH  = Math.max(1, bodyB - bodyT);
+
+                // Wick
+                ctx.beginPath();
+                ctx.moveTo(x, yOf(c.high));
+                ctx.lineTo(x, yOf(c.low));
+                ctx.strokeStyle = color;
+                ctx.lineWidth   = 1;
+                ctx.stroke();
+
+                // Body
+                ctx.fillStyle = color;
+                ctx.fillRect(x - candleW / 2, bodyT, candleW, bodyH);
+            });
+
+            // ── Y axis labels ─────────────────────────────────────────────
+            ctx.fillStyle    = '#64748b';
+            ctx.font         = `${11 * dpr / dpr}px Inter, sans-serif`;
+            ctx.textAlign    = 'left';
+            const steps      = 5;
+            for (let s = 0; s <= steps; s++) {
+                const price = lo + (hi - lo) * (s / steps);
+                const y     = yOf(price);
+                ctx.fillText(price.toFixed(price > 100 ? 1 : 4), W - PAD_R + 4, y + 4);
+                ctx.beginPath();
+                ctx.moveTo(PAD_L, y);
+                ctx.lineTo(W - PAD_R, y);
+                ctx.strokeStyle = 'rgba(51,65,85,0.5)';
+                ctx.lineWidth   = 0.5;
+                ctx.stroke();
+            }
+
+            // ── X axis time labels ────────────────────────────────────────
+            ctx.textAlign = 'center';
+            const step    = Math.floor(candles.length / 6);
+            for (let i = 0; i < candles.length; i += step) {
+                const t = new Date(candles[i].time);
+                const label = t.getHours().toString().padStart(2,'0') + ':' + t.getMinutes().toString().padStart(2,'0');
+                ctx.fillText(label, xOf(i), H - 6);
+            }
+        }
+
+        // Redraw chart on window resize
+        window.addEventListener('resize', () => {
+            if (chartData) drawCandleChart(chartData.candles, chartData.indicators);
+        });
+
+        async function controlBot(action) {
+            if (action === 'reset' && !confirm('⚠️ Reset ALL data and balance to $300?')) return;
+            try {
+                await sendControl({ action });
+                const labels = { start: '▶️ Bot started', stop: '⏹️ Bot stopped', restart: '🔄 Bot restarted', reset: '🔁 Balance & history reset' };
+                showToast(labels[action] || `${action} executed`, action === 'stop' ? 'danger' : 'success');
+                setTimeout(fetchData, 800);
+            } catch (error) {
+                console.error('controlBot error:', error);
+                showToast(`Failed: ${action}`, 'danger');
+            }
+        }
+
+        async function sendControl(payload) {
+            const res = await fetch('/api/control', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            return res.json();
         }
 
         async function manualTrade(action) {
             if (currentPair === 'ALL') {
-                alert('Please select a specific pair to trade.');
+                showToast('⚠️ Select a specific pair from the sidebar first.', 'warning');
                 return;
             }
-            if (!confirm(`Are you sure you want to ${action} ${currentPair}?`)) return;
-
+            if (!confirm(`${action === 'LONG' ? '📈' : '📉'} Open manual ${action} on ${currentPair}?`)) return;
             try {
-                await fetch('/api/control', {
-                    method: 'POST',
-                    body: JSON.stringify({ action: action.toLowerCase(), pair: currentPair })
-                });
-                alert(`Manual ${action} triggered for ${currentPair}`);
-                fetchData();
+                const result = await sendControl({ action: action.toLowerCase(), pair: currentPair });
+                if (result.error) throw new Error(result.error);
+                const msg = `${action} opened @ $${result.entryPrice} | SL: $${result.slPrice} | TP: $${result.tpPrice}`;
+                showToast(msg, action === 'LONG' ? 'success' : 'danger');
+                setTimeout(fetchData, 400);
             } catch (error) {
-                console.error('Error triggering manual trade:', error);
+                showToast(`Failed: ${error.message}`, 'danger');
             }
         }
 
         async function manualExit(pair) {
+            if (!confirm(`🚪 Exit position on ${pair}?`)) return;
             try {
-                await fetch('/api/control', {
-                    method: 'POST',
-                    body: JSON.stringify({ action: 'exit', pair })
-                });
-                alert(`Manual exit triggered for ${pair}`);
-                fetchData();
+                const result = await sendControl({ action: 'exit', pair });
+                const pnl = parseFloat(result.pnl);
+                const msg = `${pair} closed | PnL: ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)} | Bal: $${result.newBalance}`;
+                showToast(msg, pnl >= 0 ? 'success' : 'danger');
+                setTimeout(fetchData, 400);
             } catch (error) {
-                console.error('Error exiting trade:', error);
+                console.error('Manual exit error:', error);
+                showToast(`Exit failed: ${error.message}`, 'danger');
             }
+        }
+
+        async function sendManualStatus() {
+            try {
+                await sendControl({ action: 'status' });
+                showToast('Status notification sent to your phone', 'success');
+            } catch (error) {
+                showToast('Failed to send status notification', 'danger');
+            }
+        }
+
+        function showToast(msg, type = 'success') {
+            const colors = { success: '#22c55e', danger: '#ef4444', warning: '#f59e0b' };
+            const toast = document.createElement('div');
+            toast.textContent = msg;
+            toast.style.cssText = `
+                position: fixed; bottom: 1.5rem; right: 1.5rem; z-index: 9999;
+                background: ${colors[type] || colors.success}; color: white;
+                padding: 0.75rem 1.25rem; border-radius: 0.5rem;
+                font-weight: 600; font-size: 0.9rem;
+                box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+                animation: fadeIn 0.2s ease;
+            `;
+            document.body.appendChild(toast);
+            setTimeout(() => toast.remove(), 3000);
         }
 
         async function fetchData() {
             try {
                 const response = await fetch('/api/data');
                 globalData = await response.json();
-                updateUI(globalData);
+                updateUI(globalData, true); // Pass true to allow chart updates
             } catch (error) {
                 console.error('Error fetching data:', error);
             }
         }
 
-        async function controlBot(action) {
-            try {
-                await fetch('/api/control', {
-                    method: 'POST',
-                    body: JSON.stringify({ action })
-                });
-                alert(`Bot ${action} command sent.`);
-            } catch (error) {
-                console.error('Error controlling bot:', error);
-            }
-        }
-
-        function updateChart(trades, initialBalance) {
-            const ctx = document.getElementById('performanceChart').getContext('2d');
-            
-            // Filter trades by selected pair (or all)
-            let filteredTrades = currentPair === 'ALL' ? trades : trades.filter(t => t.pair === currentPair);
-            const displayTrades = filteredTrades.slice(-12);
-
-            const labels = ['Start', ...displayTrades.map(t => t.time)];
-            const dataPoints = [initialBalance];
-            let currentBalance = initialBalance;
-            
-            displayTrades.forEach(t => {
-                if (t.balance) {
-                    currentBalance = t.balance;
-                } else {
-                    currentBalance += t.pnl;
-                }
-                dataPoints.push(currentBalance);
-            });
-
-            if (performanceChart) {
-                performanceChart.destroy();
-            }
-            
-            performanceChart = new Chart(ctx, {
-                type: 'line',
-                data: {
-                    labels: labels,
-                    datasets: [{
-                        label: 'Account Balance (USDT)',
-                        data: dataPoints,
-                        borderColor: '#38bdf8',
-                        backgroundColor: 'rgba(56, 189, 248, 0.1)',
-                        borderWidth: 2,
-                        fill: true,
-                        tension: 0.3,
-                        pointRadius: 2,
-                        pointBackgroundColor: '#38bdf8'
-                    }]
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    plugins: {
-                        legend: { display: false }
-                    },
-                    scales: {
-                        x: { display: true },
-                        y: {
-                            grid: { color: '#334155' },
-                            ticks: { color: '#94a3b8' }
-                        }
-                    }
-                }
-            });
-        }
-
-        async function sendManualStatus() {
-            try {
-                await fetch('/api/control', {
-                    method: 'POST',
-                    body: JSON.stringify({ action: 'status' })
-                });
-                alert('Status notification sent.');
-            } catch (error) {
-                console.error('Error sending status:', error);
-            }
-        }
-
-        function updateUI(data) {
+        function updateUI(data, refreshChart = false) {
             // Sidebar Stats
             document.getElementById('sb-balance').textContent = `$${data.balance.toFixed(2)}`;
             document.getElementById('sb-pos').textContent = data.positions.length;
@@ -580,8 +744,8 @@
             dailyRoiEl.textContent = `${dailyRoi.toFixed(3)}%`;
             dailyRoiEl.className = `balance-value ${dailyRoi >= 0 ? 'roi-positive' : 'roi-negative'}`;
 
-            // Update Chart
-            updateChart(data.trades, data.initialBalance);
+            // Update Chart only if not currently looking at a specific pair chart
+            // Chart auto-refreshes via its own interval when a pair is selected
 
             // Update Uptime Table
             const uptimeBody = document.getElementById('uptime-body');
@@ -594,14 +758,60 @@
                 </tr>
             `).join('');
 
-            // Update Trades Table
+            // Calculate 24-Hour Performance
+            const perfStats = {};
+            const nowMs = Date.now();
+            data.trades.forEach(t => {
+                const tDate = new Date(t.time);
+                if (nowMs - tDate.getTime() > 24 * 60 * 60 * 1000) return;
+                
+                if (!perfStats[t.pair]) perfStats[t.pair] = { pnl: 0, count: 0, wins: 0, signals: {} };
+                const s = perfStats[t.pair];
+                s.pnl += t.pnl;
+                s.count += 1;
+                if (t.pnl > 0) s.wins += 1;
+                if (t.signal && t.signal !== '—') {
+                    s.signals[t.signal] = (s.signals[t.signal] || 0) + 1;
+                }
+            });
+
+            const perfBody = document.getElementById('performance-body');
+            const perfRows = Object.entries(perfStats).sort((a,b) => b[1].pnl - a[1].pnl).map(([pair, s]) => {
+                const bestSig = Object.entries(s.signals).sort((a,b) => b[1] - a[1])[0]?.[0] || '—';
+                return `
+                    <tr>
+                        <td style="font-weight: 700; color: var(--accent);">${pair}</td>
+                        <td class="${s.pnl >= 0 ? 'pnl-positive' : 'pnl-negative'}">${s.pnl >= 0 ? '+' : ''}$${s.pnl.toFixed(2)}</td>
+                        <td>${s.count}</td>
+                        <td>${((s.wins / s.count) * 100).toFixed(1)}%</td>
+                        <td style="font-size: 0.75rem; color: var(--text-secondary);">${bestSig}</td>
+                    </tr>
+                `;
+            });
+            perfBody.innerHTML = perfRows.length > 0 ? perfRows.join('') : '<tr><td colspan="5" style="text-align:center; padding:1.5rem; color:var(--text-secondary);">No trades in last 24h</td></tr>';
+
+            // Update Past Trades Table
             const tradesBody = document.getElementById('trades-body');
             tradesBody.innerHTML = data.trades.slice().reverse().map(trade => {
-                const isManual = trade.reason === 'MANUAL_EXIT';
+                const isManual = trade.reason === 'MANUAL_EXIT' || trade.signal === 'MANUAL';
+                const signalColors = {
+                    NEAR_SMA_LONG: '#38bdf8', UPPER_BAND_LONG: '#38bdf8', LOWER_BAND_SHORT: '#f472b6',
+                    RSI_OVERSOLD_LONG: '#22c55e', RSI_OVERBOUGHT_SHORT: '#ef4444',
+                    BAND_BOUNCE_LONG: '#86efac', BAND_BOUNCE_SHORT: '#fca5a5',
+                    MOMENTUM_LONG: '#4ade80', MOMENTUM_SHORT: '#f87171',
+                    DOUBLE_DIP_LONG: '#a3e635', SMA_CROSS_LONG: '#67e8f9', SMA_CROSS_SHORT: '#f9a8d4',
+                    MANUAL: '#38bdf8'
+                };
+                const sigColor = signalColors[trade.signal] || 'var(--text-secondary)';
                 return `
                     <tr class="${trade.pnl >= 0 ? 'row-win' : 'row-loss'}">
                         <td style="color: var(--text-secondary); font-size: 0.75rem;">${trade.time}</td>
                         <td style="font-weight: 700; color: var(--accent);">${trade.pair}</td>
+                        <td>
+                            <span style="font-size: 0.7rem; padding: 0.15rem 0.4rem; border-radius: 0.25rem; background: ${sigColor}22; border: 1px solid ${sigColor}55; color: ${sigColor}; font-weight: 600; letter-spacing: 0.03em;">
+                                ${trade.signal || '—'}
+                            </span>
+                        </td>
                         <td>
                             <span style="font-size: 0.75rem; padding: 0.2rem 0.5rem; border-radius: 0.25rem; background: ${isManual ? 'rgba(56, 189, 248, 0.2)' : 'rgba(148, 163, 184, 0.1)'}; border: 1px solid ${isManual ? 'var(--accent)' : 'rgba(148, 163, 184, 0.2)'}; color: ${isManual ? 'var(--accent)' : 'inherit'}; font-weight: ${isManual ? '600' : '400'}">
                                 ${trade.reason}
@@ -612,56 +822,138 @@
                     </tr>
                 `
             }).join('');
+
             // Update Positions
             const grid = document.getElementById('positions-grid');
             if (data.positions.length === 0) {
                 grid.innerHTML = '<div style="color: var(--text-secondary); padding: 2rem; text-align: center; grid-column: 1/-1;">No active positions</div>';
             } else {
                 grid.innerHTML = data.positions.map(pos => {
-                    const distToTp = Math.abs(pos.currentPrice - pos.takeProfitPrice);
-                    const distToSl = Math.abs(pos.currentPrice - pos.stopLossPrice);
+                    const distToTp   = Math.abs(pos.currentPrice - pos.takeProfitPrice);
+                    const distToSl   = Math.abs(pos.currentPrice - pos.stopLossPrice);
                     const closerToTp = distToTp < distToSl;
                     const priceColor = closerToTp ? 'var(--success)' : 'var(--danger)';
 
+                    // ── Trailing tier display ──────────────────────────────
+                    const tier = pos.trailTier || 0;
+                    const tierLabels = { 0: null, 1: '🎯 TIER 1 ACTIVE', 2: '🚀 TIER 2 ACTIVE' };
+                    const tierColors = { 0: null, 1: '#f59e0b', 2: '#a855f7' };
+                    const tierBadge  = tier > 0 ? `
+                        <div style="background:${tierColors[tier]}22; border:1px solid ${tierColors[tier]}55; border-radius:0.35rem; padding:0.35rem 0.6rem; margin-bottom:0.75rem; text-align:center; font-size:0.75rem; font-weight:700; color:${tierColors[tier]}; letter-spacing:0.05em;">
+                            ${tierLabels[tier]} — Trailing Stop Ladder
+                        </div>` : '';
+
+                    // ── Progress toward next tier (or TP) ─────────────────
+                    const tpDist     = Math.abs(pos.takeProfitPrice - pos.entryPrice);
+                    const progress   = pos.direction === 'LONG'
+                        ? Math.max(0, Math.min(1, (pos.currentPrice - pos.entryPrice) / tpDist))
+                        : Math.max(0, Math.min(1, (pos.entryPrice - pos.currentPrice) / tpDist));
+                    const triggerPct = 70;
+                    const progressPct = (progress * 100).toFixed(1);
+
+                    // ── Live exit PnL preview ──────────────────────────────
+                    const TAKER_FEE  = 0.0006;
+                    const exitFee    = (pos.allocatedCapital * pos.leverageApplied) * TAKER_FEE;
+                    const totalFees  = (pos.entryFeePaid || 0) + exitFee;
+                    const priceDiff  = pos.direction === 'LONG'
+                        ? (pos.currentPrice - pos.entryPrice)
+                        : (pos.entryPrice - pos.currentPrice);
+                    const rawPnl     = (priceDiff / pos.entryPrice) * (pos.allocatedCapital * pos.leverageApplied);
+                    const livePnl    = rawPnl - totalFees;
+                    const livePnlPct = (priceDiff / pos.entryPrice) * pos.leverageApplied * 100;
+                    const liveRoi    = ((livePnl / data.initialBalance) * 100);
+                    const pnlColor   = livePnl >= 0 ? 'var(--success)' : 'var(--danger)';
+                    const pnlArrow   = livePnl >= 0 ? '▲' : '▼';
+
+                    // ── Time open ─────────────────────────────────────────
+                    const openedMs   = new Date(pos.timestamp).getTime();
+                    const minsOpen   = isNaN(openedMs) ? '—' : Math.floor((Date.now() - openedMs) / 60000) + 'm';
+
                     return `
                     <div class="card" style="border-top: 4px solid ${priceColor}">
-                        <span class="pos-badge ${pos.direction === 'LONG' ? 'badge-long' : 'badge-short'}">${pos.direction}</span>
-                        <h2>${pos.pair}</h2>
-                        <div class="stat-row" style="margin-bottom: 1rem; background: rgba(0,0,0,0.2); padding: 0.5rem; border-radius: 0.5rem;">
-                            <span class="stat-label">Current Price</span>
-                            <span class="stat-value" style="color: ${priceColor}; font-size: 1.25rem;">$${pos.currentPrice.toLocaleString()}</span>
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.75rem;">
+                            <span class="pos-badge ${pos.direction === 'LONG' ? 'badge-long' : 'badge-short'}">${pos.direction}</span>
+                            <span style="font-size:0.75rem; color:var(--text-secondary);">⏱ ${minsOpen}</span>
                         </div>
+                        <h2 style="margin-bottom:0.75rem;">${pos.pair}</h2>
+                        ${tierBadge}
+
+                        <!-- Live exit preview box -->
+                        <div style="background:${livePnl >= 0 ? 'rgba(34,197,94,0.08)' : 'rgba(239,68,68,0.08)'}; border:1px solid ${livePnl >= 0 ? 'rgba(34,197,94,0.3)' : 'rgba(239,68,68,0.3)'}; border-radius:0.5rem; padding:0.75rem; margin-bottom:1rem;">
+                            <div style="font-size:0.7rem; color:var(--text-secondary); text-transform:uppercase; letter-spacing:0.05em; margin-bottom:0.4rem;">If you exit now</div>
+                            <div style="display:flex; justify-content:space-between; align-items:baseline;">
+                                <span style="font-size:1.4rem; font-weight:700; color:${pnlColor};">${pnlArrow} $${Math.abs(livePnl).toFixed(2)}</span>
+                                <span style="font-size:0.9rem; font-weight:600; color:${pnlColor};">${livePnlPct >= 0 ? '+' : ''}${livePnlPct.toFixed(2)}%</span>
+                            </div>
+                            <div style="font-size:0.75rem; color:var(--text-secondary); margin-top:0.25rem;">
+                                ROI on account: <span style="color:${pnlColor}; font-weight:600;">${liveRoi >= 0 ? '+' : ''}${liveRoi.toFixed(3)}%</span>
+                                <span style="margin-left:0.5rem; opacity:0.6;">(after fees)</span>
+                            </div>
+                        </div>
+
+                        <!-- Price row -->
+                        <div class="stat-row" style="margin-bottom:0.5rem; background:rgba(0,0,0,0.2); padding:0.5rem; border-radius:0.5rem;">
+                            <span class="stat-label">Current Price</span>
+                            <span class="stat-value" style="color:${priceColor}; font-size:1.1rem;">$${pos.currentPrice.toLocaleString()}</span>
+                        </div>
+
                         <div class="stat-row">
                             <span class="stat-label">Entry Price</span>
                             <span class="stat-value">$${pos.entryPrice.toLocaleString()}</span>
                         </div>
                         <div class="stat-row">
+                            <span class="stat-label">Signal</span>
+                            <span class="stat-value" style="font-size:0.72rem; color:var(--accent); letter-spacing:0.03em;">${pos.signalName || '—'}</span>
+                        </div>
+                        <div class="stat-row">
                             <span class="stat-label">Take Profit</span>
-                            <span class="stat-value" style="color: var(--success)">$${pos.takeProfitPrice.toLocaleString()}</span>
+                            <span class="stat-value" style="color:var(--success);">$${pos.takeProfitPrice.toLocaleString()}</span>
                         </div>
                         <div class="stat-row">
                             <span class="stat-label">Stop Loss</span>
-                            <span class="stat-value" style="color: var(--danger)">$${pos.stopLossPrice.toLocaleString()}</span>
+                            <span class="stat-value" style="color:var(--danger);">$${pos.stopLossPrice.toLocaleString()}</span>
                         </div>
                         <div class="stat-row">
-                            <span class="stat-label">Size</span>
-                            <span class="stat-value">${pos.contractSize}</span>
+                            <span class="stat-label">Size / Capital</span>
+                            <span class="stat-value">${pos.contractSize} · $${pos.allocatedCapital.toFixed(2)}</span>
                         </div>
-                        <div class="stat-row" style="margin-top: 1rem; border-top: 1px solid var(--border); padding-top: 1rem;">
-                            <span class="stat-label">Exit Progress</span>
+
+                        <!-- Progress bar -->
+                        <div class="stat-row" style="margin-top:0.75rem; border-top:1px solid var(--border); padding-top:0.75rem;">
+                            <span class="stat-label">SL ← Progress → TP</span>
                         </div>
-                        <div style="height: 8px; background: #334155; border-radius: 4px; margin: 0.5rem 0; overflow: hidden; display: flex;">
-                            <div style="width: ${Math.min(100, (distToSl / (distToTp + distToSl)) * 100)}%; background: var(--danger); opacity: 0.6;"></div>
-                            <div style="width: ${Math.min(100, (distToTp / (distToTp + distToSl)) * 100)}%; background: var(--success); opacity: 0.6;"></div>
+                        <div style="height:8px; background:#334155; border-radius:4px; margin:0.4rem 0; overflow:hidden; display:flex;">
+                            <div style="width:${Math.min(100,(distToSl/(distToTp+distToSl))*100)}%; background:var(--danger); opacity:0.6;"></div>
+                            <div style="width:${Math.min(100,(distToTp/(distToTp+distToSl))*100)}%; background:var(--success); opacity:0.6;"></div>
                         </div>
-                        <div class="stat-row" style="font-size: 0.75rem;">
-                            <span style="color: var(--danger)">SL: ${((distToSl / pos.currentPrice) * 100).toFixed(2)}% ($${(pos.contractSize * distToSl).toFixed(2)})</span>
-                            <span style="color: var(--success)">TP: ${((distToTp / pos.currentPrice) * 100).toFixed(2)}% ($${(pos.contractSize * distToTp).toFixed(2)})</span>
+                        <div class="stat-row" style="font-size:0.72rem;">
+                            <span style="color:var(--danger);">SL ${((distToSl/pos.currentPrice)*100).toFixed(2)}% away ($${(pos.contractSize*distToSl).toFixed(2)})</span>
+                            <span style="color:var(--success);">TP ${((distToTp/pos.currentPrice)*100).toFixed(2)}% away ($${(pos.contractSize*distToTp).toFixed(2)})</span>
                         </div>
-                        <button onclick="manualExit('${pos.pair}')" style="margin-top:1rem; width: 100%; background: var(--danger); color: white; border: none; padding: 0.5rem; border-radius: 0.25rem; cursor: pointer;">Exit Position</button>
-                        <div class="stat-row" style="margin-top: 1rem; border-top: 1px solid var(--border); padding-top: 0.5rem;">
+
+                        <!-- Trail ladder progress -->
+                        <div style="margin-top:0.75rem; border-top:1px solid var(--border); padding-top:0.75rem;">
+                            <div style="display:flex; justify-content:space-between; font-size:0.7rem; color:var(--text-secondary); margin-bottom:0.3rem;">
+                                <span>Trail progress to ${tier < 2 ? (tier === 0 ? 'Tier 1' : 'Tier 2') : 'max'}</span>
+                                <span style="color:${progress >= 0.7 ? '#f59e0b' : 'var(--text-secondary)'}; font-weight:600;">${progressPct}% / 70%</span>
+                            </div>
+                            <div style="height:6px; background:#334155; border-radius:3px; overflow:hidden;">
+                                <div style="height:100%; width:${Math.min(100, progress/0.7*100)}%; background:${progress >= 0.7 ? '#f59e0b' : '#38bdf8'}; border-radius:3px; transition:width 0.3s;"></div>
+                            </div>
+                            <div style="display:flex; justify-content:space-between; font-size:0.65rem; color:var(--text-secondary); margin-top:0.2rem;">
+                                <span>Entry</span>
+                                <span style="color:#f59e0b;">▲ 70% trigger</span>
+                                <span>TP</span>
+                            </div>
+                        </div>
+
+                        <button onclick="manualExit('${pos.pair}')" style="margin-top:1rem; width:100%; background:var(--danger); color:white; border:none; padding:0.6rem; border-radius:0.35rem; cursor:pointer; font-weight:600; font-size:0.9rem;">
+                            🚪 Exit Now · ${pnlArrow} $${Math.abs(livePnl).toFixed(2)} (${livePnlPct >= 0 ? '+' : ''}${livePnlPct.toFixed(2)}%)
+                        </button>
+
+                        <div class="stat-row" style="margin-top:0.75rem; border-top:1px solid var(--border); padding-top:0.5rem;">
                             <span class="stat-label">Opened</span>
-                            <span class="stat-value" style="font-size: 0.75rem; color: var(--text-secondary)">${pos.timestamp}</span>
+                            <span class="stat-value" style="font-size:0.72rem; color:var(--text-secondary);">${pos.timestamp}</span>
                         </div>
                     </div>
                 `}).join('');
@@ -687,7 +979,7 @@
 
         // Initial fetch and set interval
         fetchData();
-        setInterval(fetchData, 10000);
+        setInterval(fetchData, 1000);
     </script>
 </body>
 </html>

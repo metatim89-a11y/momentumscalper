@@ -12,10 +12,9 @@ const CONFIG = {
     riskPercentPerTrade: 0.10,
     leverage: 3,
     takerFeeRate: 0.0006,
-    stopLossPercent: 0.0035,
-    takeProfitPercent: 0.0075
-};
-
+    stopLossPercent: 0.0026,
+    takeProfitPercent: 0.0074
+    };
 function simulate(leverage, label) {
     if (!fs.existsSync(CONFIG.logFile)) {
         console.error("Log file not found!");

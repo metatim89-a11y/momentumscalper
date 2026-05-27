@@ -10,10 +10,10 @@ const CONFIG = {
     targetPairs: ['BTC/USDT', 'ETH/USDT', 'SOL/USDT'],
     timeframe: '1m',
     fetchLimit: 5000,
-    smaWindowSize: 30,
-    volaMultiplier: 2.0,
-    stopLossPercent: 0.0035,
-    takeProfitPercent: 0.0075,
+    smaWindowSize: 30,         
+    volaMultiplier: 2.0,       
+    stopLossPercent: 0.0026,   // 0.26%
+    takeProfitPercent: 0.0074, // 0.74%
     takerFeeRate: 0.0006,
     startingWalletUSDT: 1000.00,
     riskPercentPerTrade: 0.10,
@@ -56,37 +56,41 @@ async function runBacktest() {
             let totalTrades = 0;
             let wins = 0;
 
+            // Bug #8 fix: build the 3m-block array incrementally so it costs O(n) total,
+            // and each bar only ever sees blocks derived from bars strictly before it
+            // (no lookahead bias).
+            const blocks3m = [];
+
             for (let i = 120; i < bars1m.length; i++) {
+                // Incrementally extend blocks3m: add a new block whenever i crosses a 3m boundary
+                // A new block closes at i when (i % 3 === 2) and all three bars exist.
+                if (i % 3 === 2 && bars1m[i - 2] && bars1m[i - 1] && bars1m[i]) {
+                    blocks3m.push({ close: bars1m[i].close });
+                }
+
                 const currentBar = bars1m[i];
 
                 if (activePosition) {
-                    const currentAllocation = wallet * CONFIG.riskPercentPerTrade;
-                    const notionalValue = currentAllocation * CONFIG.leverage;
-                    const totalFees = notionalValue * CONFIG.takerFeeRate * 2;
+                    // Bug #7 fix: fees were already captured at entry price/allocation — use stored values.
+                    const totalFees = activePosition.entryFees + activePosition.exitFees;
                     if (activePosition.direction === 'LONG') {
                         if (currentBar.high >= activePosition.tp) {
-                            wallet += (currentAllocation * CONFIG.takeProfitPercent * CONFIG.leverage) - totalFees;
+                            wallet += (activePosition.allocation * CONFIG.takeProfitPercent * CONFIG.leverage) - totalFees;
                             wins++; totalTrades++; activePosition = null;
                         } else if (currentBar.low <= activePosition.sl) {
-                            wallet -= (currentAllocation * CONFIG.stopLossPercent * CONFIG.leverage) + totalFees;
+                            wallet -= (activePosition.allocation * CONFIG.stopLossPercent * CONFIG.leverage) + totalFees;
                             totalTrades++; activePosition = null;
                         }
                     } else if (activePosition.direction === 'SHORT') {
                         if (currentBar.low <= activePosition.tp) {
-                            wallet += (currentAllocation * CONFIG.takeProfitPercent * CONFIG.leverage) - totalFees;
+                            wallet += (activePosition.allocation * CONFIG.takeProfitPercent * CONFIG.leverage) - totalFees;
                             wins++; totalTrades++; activePosition = null;
                         } else if (currentBar.high >= activePosition.sl) {
-                            wallet -= (currentAllocation * CONFIG.stopLossPercent * CONFIG.leverage) + totalFees;
+                            wallet -= (activePosition.allocation * CONFIG.stopLossPercent * CONFIG.leverage) + totalFees;
                             totalTrades++; activePosition = null;
                         }
                     }
                 } else {
-                    let blocks3m = [];
-                    for (let k = 0; k < i; k += 3) {
-                        if (bars1m[k] && bars1m[k+1] && bars1m[k+2]) {
-                            blocks3m.push({ close: bars1m[k+2].close });
-                        }
-                    }
                     if (blocks3m.length < CONFIG.smaWindowSize) continue;
 
                     let lookbackCloses = blocks3m.slice(-CONFIG.smaWindowSize).map(b => b.close);
@@ -95,19 +99,30 @@ async function runBacktest() {
                     const upperBand = sma + (CONFIG.volaMultiplier * stdDev);
                     const lowerBand = sma - (CONFIG.volaMultiplier * stdDev);
 
+                    // Bug #7 fix: capture allocation and both fee legs at entry time.
                     if (currentBar.close > upperBand) {
+                        const allocation = wallet * CONFIG.riskPercentPerTrade;
+                        const notional   = allocation * CONFIG.leverage;
                         activePosition = {
                             direction: 'SHORT',
-                            entry: currentBar.close,
-                            tp: currentBar.close * (1 - CONFIG.takeProfitPercent),
-                            sl: currentBar.close * (1 + CONFIG.stopLossPercent)
+                            entry:      currentBar.close,
+                            tp:         currentBar.close * (1 - CONFIG.takeProfitPercent),
+                            sl:         currentBar.close * (1 + CONFIG.stopLossPercent),
+                            allocation,
+                            entryFees:  notional * CONFIG.takerFeeRate,
+                            exitFees:   notional * CONFIG.takerFeeRate
                         };
                     } else if (currentBar.close < lowerBand) {
+                        const allocation = wallet * CONFIG.riskPercentPerTrade;
+                        const notional   = allocation * CONFIG.leverage;
                         activePosition = {
                             direction: 'LONG',
-                            entry: currentBar.close,
-                            tp: currentBar.close * (1 + CONFIG.takeProfitPercent),
-                            sl: currentBar.close * (1 - CONFIG.stopLossPercent)
+                            entry:      currentBar.close,
+                            tp:         currentBar.close * (1 + CONFIG.takeProfitPercent),
+                            sl:         currentBar.close * (1 - CONFIG.stopLossPercent),
+                            allocation,
+                            entryFees:  notional * CONFIG.takerFeeRate,
+                            exitFees:   notional * CONFIG.takerFeeRate
                         };
                     }
                 }

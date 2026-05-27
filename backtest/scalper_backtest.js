@@ -9,11 +9,11 @@ const ccxt = require('ccxt');
 const CONFIG = {
     targetPairs: ['BTC/USDT', 'ETH/USDT', 'SOL/USDT'],
     timeframe: '1m',           
-    fetchLimit: 5000,          
+    fetchLimit: 10000,          
     smaWindowSize: 30,         
     volaMultiplier: 2.0,       
-    stopLossPercent: 0.0035,   // 0.35%
-    takeProfitPercent: 0.0075, // 0.75%
+    stopLossPercent: 0.0026,   // 0.26%
+    takeProfitPercent: 0.0074, // 0.74%
     takerFeeRate: 0.0006,      
     startingWalletUSDT: 1000.00,
     riskPercentPerTrade: 0.10, // 10% of current wallet
@@ -32,7 +32,7 @@ async function runBacktest() {
     console.log("=========================================================\n");
 
     const exchange = new ccxt.weex({ enableRateLimit: true, options: { defaultType: 'swap' } });
-    const totalMinutes = 72 * 60; // 72 hours
+    const totalMinutes = 144 * 60; // 144 hours (6 days)
     
     for (const pair of CONFIG.targetPairs) {
         try {

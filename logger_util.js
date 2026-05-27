@@ -22,18 +22,16 @@ function generateEventId() {
 }
 
 function getTimestamp() {
-    const now = new Date().toLocaleString('en-US', {
+    const now = new Date();
+    const date = now.toISOString().split('T')[0];
+    const time = now.toLocaleString('en-US', {
         timeZone: 'America/Chicago',
-        month: '2-digit',
-        day: '2-digit',
-        year: '2-digit',
         hour: '2-digit',
         minute: '2-digit',
+        second: '2-digit',
         hour12: true
     });
-    const [datePart, timePart] = now.split(', ');
-    const [month, day, year] = datePart.split('/');
-    return `${day}/${month}/${year} | ${timePart}`;
+    return `${date} | ${time}`;
 }
 
 function logError(scriptName, errorMsg) {

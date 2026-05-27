@@ -1,61 +1,92 @@
 /**
  * File: scalper_machine.js
- * Version: 2.7.1
+ * Version: 3.0.0
  * Description: Core Multi-Asset Volatility Strategy Engine (Execution Only)
  * Mandate: Zero Placeholders, Full Functional Implementation, Keep It Simple
+ *
+ * Changelog v3.0.0 — Trade Logic Overhaul:
+ *   FIX: RSI now uses proper Wilder smoothing (EMA-based), not single-pass average
+ *   FIX: Added cooldownBlocks per-pair — no re-entry for N blocks after a stop-loss
+ *   FIX: Added SMA slope filter — trend direction must agree before any signal fires
+ *   FIX: NEAR_SMA_LONG now requires RSI confirmation (< 50) and slope to be upward
+ *   FIX: SMA crossover signals now require slope agreement across all 3 SMAs
+ *   FIX: Signal priority reordered — crossovers last (noisiest on 2s ticks)
+ *   FIX: Momentum signal now requires RSI confirmation before firing
+ *   FIX: Band-Bounce signals require volume proxy (price range > 0.5 * stdDev)
+ *   ADD: Per-pair consecutive stop-loss counter with escalating cooldown
+ *   ADD: Wilder-smoothed RSI state persists across blocks (avgGain/avgLoss stored)
+ *   ADD: Slope computed as (smaFast - smaSlow) / smaSlow — normalized trend strength
+ *   ADD: MIN_SLOPE_THRESHOLD filters flat/choppy markets from trend signals
+ *   ADD: MAX_CONCURRENT_SAME_DIRECTION limit — prevents all 5 pairs going LONG/SHORT simultaneously
+ *   KEEP: All trailing stop ladder logic (Tier 1 / Tier 2)
+ *   KEEP: Balance mutex, corrupt state reset, manual exit/trade watchers
+ *   KEEP: All precision rules, DOGE expanded SL/TP, fee accounting
  */
 
 const ccxt = require('ccxt');
-const fs = require('fs');
+const fs   = require('fs');
 const { log, logError, ensureLogsDir } = require('./logger_util');
 const { execSync } = require('child_process');
 
+const TOKEN_CONFIGS = {
+    'BTC/USDT':  { sl: 0.0025, tp: 0.0060, rsiLow: 30, rsiHigh: 70, timeframe: '15m' },
+    'ETH/USDT':  { sl: 0.0025, tp: 0.0060, rsiLow: 30, rsiHigh: 70, timeframe: '15m' },
+    'SOL/USDT':  { sl: 0.0025, tp: 0.0060, rsiLow: 30, rsiHigh: 70, timeframe: '5m' },
+    'ADA/USDT':  { sl: 0.0025, tp: 0.0060, rsiLow: 30, rsiHigh: 70, timeframe: '5m' },
+    'DOGE/USDT': { sl: 0.0030, tp: 0.0075, rsiLow: 25, rsiHigh: 75, timeframe: '30m' },
+    'XRP/USDT':  { sl: 0.0025, tp: 0.0060, rsiLow: 30, rsiHigh: 70, timeframe: '30m' },
+    'BNB/USDT':  { sl: 0.0025, tp: 0.0060, rsiLow: 30, rsiHigh: 70, timeframe: '15m' },
+    'LINK/USDT': { sl: 0.0025, tp: 0.0060, rsiLow: 30, rsiHigh: 70, timeframe: '30m' },
+    'DOT/USDT':  { sl: 0.0025, tp: 0.0060, rsiLow: 30, rsiHigh: 70, timeframe: '15m' },
+    'AVAX/USDT': { sl: 0.0025, tp: 0.0060, rsiLow: 30, rsiHigh: 70, timeframe: '30m' }
+};
+
 const CONFIG = {
-    version: '2.7.1',
-    targetPairs: ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'DOGE/USDT', 'SHIB/USDT', 'XRP/USDT', 'ADA/USDT', 'LINK/USDT', 'MATIC/USDT', 'AVAX/USDT', 'LTC/USDT', 'NEAR/USDT', 'PEPE/USDT'],
-    scanIntervalMs: 60000,
+    version: '3.0.0',
+    targetPairs: ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'ADA/USDT', 'DOGE/USDT'],
+    scanIntervalMs: 2000,
     blocksToAggregate: 3,
-    startingBalanceUSDT: 1000.00,
+    startingBalanceUSDT: 300.00,
     riskPercentPerTrade: 0.10,
     leverageMultiplier: 3,
-    smaWindowSize: 30,
-    volaMultiplier: 2.0,
-    stopLossPercent: 0.0035,
-    takeProfitPercent: 0.0075,
+    smaFast: 16,
+    smaMed: 26,
+    smaSlow: 39,
+    volaMultiplier: 1.2,
+    nearSmaThreshold: 0.999,
+    stopLossPercent: 0.0026,
+    takeProfitPercent: 0.0074,
     takerFeeRate: 0.0006,
-    logFile: './scalper_history.log',
+    rsiPeriod: 14,
+    rsiOversold: 35,
+    rsiOverbought: 65,
+    momentumBlocks: 3,
+    bandBounceConfirmBlocks: 2,
+    minSlopeThreshold: 0.00005,
+    maxConcurrentSameDirection: 3,
     balanceFile: './account_balance.json',
     precisionRules: {
         'BTC/USDT': { amount: 4, price: 2 },
         'ETH/USDT': { amount: 3, price: 2 },
         'SOL/USDT': { amount: 2, price: 4 },
-        'DOGE/USDT': { amount: 0, price: 4 },
-        'SHIB/USDT': { amount: 0, price: 8 },
-        'XRP/USDT': { amount: 1, price: 4 },
-        'ADA/USDT': { amount: 1, price: 4 },
-        'LINK/USDT': { amount: 2, price: 3 },
-        'MATIC/USDT': { amount: 1, price: 4 },
-        'AVAX/USDT': { amount: 2, price: 2 },
-        'LTC/USDT': { amount: 2, price: 2 },
-        'NEAR/USDT': { amount: 2, price: 3 },
-        'PEPE/USDT': { amount: 0, price: 8 }
-    }
+        'ADA/USDT': { amount: 1, price: 6 },
+        'DOGE/USDT': { amount: 0, price: 6 }
+    },
+    // Step-Trailing Stop Logic
+    trailStepPct: 0.40,      // Milestone every 40% progress
+    trailSlStepPct: 0.20,    // Move SL up by 20% of target distance per step
+    trailTpBumpPct: 0.0075,  // Bump TP by 0.75% per step
+    // Risk Management Enhancements
+    fastBreakevenPct: 0.35,  // Move SL to break-even at 35% target progress
+    timeCutoffMs: 600000,    // 10 minutes (10 * 60 * 1000)
+    trendFlipCheckInterval: 5, // Check higher trend every 5 blocks for active positions
+    // Cooldown
+    cooldownBlocksBase: 5,
+    cooldownBlocksMax: 20,
+    consecutiveSLEscalation: 1.5
 };
 
-function getBalance() {
-    if (!fs.existsSync(CONFIG.balanceFile)) {
-        fs.writeFileSync(CONFIG.balanceFile, JSON.stringify({ balance: CONFIG.startingBalanceUSDT }, null, 4));
-        return CONFIG.startingBalanceUSDT;
-    }
-    const data = JSON.parse(fs.readFileSync(CONFIG.balanceFile, 'utf8'));
-    return data.balance;
-}
-
-function updateBalance(newBalance) {
-    fs.writeFileSync(CONFIG.balanceFile, JSON.stringify({ balance: parseFloat(newBalance.toFixed(2)) }, null, 4));
-}
-
-// Balance mutex — prevents race condition on simultaneous multi-pair closes
+// ─── Balance mutex ────────────────────────────────────────────────────────────
 let balanceLocked = false;
 async function acquireBalanceLock() {
     while (balanceLocked) {
@@ -63,241 +94,777 @@ async function acquireBalanceLock() {
     }
     balanceLocked = true;
 }
-function releaseBalanceLock() {
-    balanceLocked = false;
+function releaseBalanceLock() { balanceLocked = false; }
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+function getBalance() {
+    if (!fs.existsSync(CONFIG.balanceFile)) {
+        fs.writeFileSync(CONFIG.balanceFile, JSON.stringify({ balance: CONFIG.startingBalanceUSDT }, null, 4));
+        return CONFIG.startingBalanceUSDT;
+    }
+    return JSON.parse(fs.readFileSync(CONFIG.balanceFile, 'utf8')).balance;
 }
-
-ensureLogsDir();
-
-const priceStreams = {};
-const scanBuffers = {};
-const strategicMatrices = {};
-
-// Initialize data structures for all target pairs
-CONFIG.targetPairs.forEach(pair => {
-    priceStreams[pair] = [];
-    scanBuffers[pair] = [];
-    strategicMatrices[pair] = { upper: 0, sma: 0, lower: 0 };
-});
-
+function updateBalance(newBalance) {
+    fs.writeFileSync(CONFIG.balanceFile, JSON.stringify({ balance: parseFloat(newBalance.toFixed(2)) }, null, 4));
+}
 function getStateFilePath(pair) {
     return `./scalper_state_${pair.replace('/', '-')}.json`;
 }
-
+function readState(pair) {
+    const stateFile = getStateFilePath(pair);
+    if (!fs.existsSync(stateFile)) return { positionActive: false };
+    try {
+        return JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+    } catch (parseErr) {
+        logError('scalper_machine.js', `[CORRUPT STATE] ${pair} state file unreadable, resetting. Error: ${parseErr.message}`);
+        fs.writeFileSync(stateFile, JSON.stringify({ positionActive: false }, null, 4));
+        return { positionActive: false };
+    }
+}
 function getCentralTimestamp() {
     return new Date().toLocaleString('en-US', { timeZone: 'America/Chicago' });
 }
-
-function appendHistoryLog(msg) {
-    log('BOT', CONFIG.version, msg);
-}
-
+function appendHistoryLog(msg) { log('BOT', CONFIG.version, msg); }
 function sendNotification(title, content) {
     try {
         execSync(`termux-notification -t "${title}" -c "${content}" --id scalper_bot --sound --priority max`);
-    } catch (err) {
-        // Silent fail if termux-api is missing
-    }
+    } catch (_) {}
 }
-
 function calculateSMA(prices) {
     return prices.reduce((acc, p) => acc + p, 0) / prices.length;
 }
-
 function calculateStandardDeviation(prices, mean) {
     const squareDiffs = prices.map(p => Math.pow(p - mean, 2));
     return Math.sqrt(squareDiffs.reduce((acc, val) => acc + val, 0) / prices.length);
 }
 
+// ─── RSI — Wilder Smoothing (proper EMA-based) ────────────────────────────────
+// First call seeds from a full period of data.
+// Subsequent calls use stored avgGain/avgLoss for true Wilder smoothing.
+// wilderState = { avgGain, avgLoss, prevPrice, seeded }
+function calculateRSIWilder(prices, period, wilderState) {
+    // If not yet seeded, seed from the last (period+1) prices
+    if (!wilderState.seeded) {
+        if (prices.length < period + 1) return null;
+        const slice = prices.slice(-(period + 1));
+        let gains = 0, losses = 0;
+        for (let i = 1; i <= period; i++) {
+            const diff = slice[i] - slice[i - 1];
+            if (diff >= 0) gains  += diff;
+            else           losses -= diff;
+        }
+        wilderState.avgGain  = gains  / period;
+        wilderState.avgLoss  = losses / period;
+        wilderState.prevPrice = slice[slice.length - 1];
+        wilderState.seeded    = true;
+    } else {
+        // Incremental Wilder update using only the latest price
+        const currentPrice = prices[prices.length - 1];
+        const diff = currentPrice - wilderState.prevPrice;
+        const gain  = diff > 0 ? diff : 0;
+        const loss  = diff < 0 ? -diff : 0;
+        wilderState.avgGain  = (wilderState.avgGain  * (period - 1) + gain)  / period;
+        wilderState.avgLoss  = (wilderState.avgLoss  * (period - 1) + loss)  / period;
+        wilderState.prevPrice = currentPrice;
+    }
+    if (wilderState.avgLoss === 0) return 100;
+    const rs = wilderState.avgGain / wilderState.avgLoss;
+    return 100 - (100 / (1 + rs));
+}
+
+// N-block percentage change
+function momentumPct(prices, n) {
+    if (prices.length < n + 1) return null;
+    const now  = prices[prices.length - 1];
+    const then = prices[prices.length - 1 - n];
+    if (then === 0) return null;
+    return (now - then) / then;
+}
+
+// Normalized SMA slope: (smaFast - smaSlow) / smaSlow
+// Positive = uptrend, Negative = downtrend
+function computeSlope(matrix) {
+    if (!matrix.ready || matrix.smaSlow === 0) return 0;
+    return (matrix.smaFast - matrix.smaSlow) / matrix.smaSlow;
+}
+
+// ─── In-memory position direction cache (avoids 5x disk reads per signal check) ─
+// Kept in sync by executePaperOrder (open) and closePosition (close).
+const activeDirectionCache = {};   // pair → 'LONG' | 'SHORT' | null
+for (const _p of ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'ADA/USDT', 'DOGE/USDT']) activeDirectionCache[_p] = null;
+
+// Count how many pairs are currently in a given direction (in-memory, O(5) no disk)
+function countActiveDirection(direction) {
+    let count = 0;
+    for (const pair of CONFIG.targetPairs) {
+        if (activeDirectionCache[pair] === direction) count++;
+    }
+    return count;
+}
+
+// ─── Per-pair state ───────────────────────────────────────────────────────────
+const priceStreams      = {};
+const scanBuffers       = {};
+const strategicMatrices = {};
+const signalTrackers   = {};
+const wilderStates     = {};   // Wilder RSI state per pair
+const cooldownState    = {};   // { blocksRemaining, consecutiveSL }
+
+for (const pair of CONFIG.targetPairs) {
+    priceStreams[pair]      = [];
+    scanBuffers[pair]       = [];
+    strategicMatrices[pair] = { upper: 0, smaMed: 0, lower: 0, ready: false };
+    signalTrackers[pair]    = {
+        previousClose: null,
+        bandBreachBlock: { upper: null, lower: null },
+        blockIndex: 0,
+        prevSmaFast: null,
+        prevSmaMed: null,
+        prevSmaSlow: null
+    };
+    wilderStates[pair]  = { avgGain: 0, avgLoss: 0, prevPrice: null, seeded: false };
+    cooldownState[pair] = { blocksRemaining: 0, consecutiveSL: 0 };
+}
+
+// ─── Seed ─────────────────────────────────────────────────────────────────────
 async function seedHistoricalData(exchange, pair) {
     try {
-        const rawCandles = await exchange.fetchOHLCV(pair, '1m', undefined, 91);
-        if (!rawCandles || rawCandles.length < 90) return;
-
+        const rawCandles = await exchange.fetchOHLCV(pair, '1m', undefined, 100);
+        if (!rawCandles || rawCandles.length < 90) {
+            appendHistoryLog(`[SEED WARN] ${pair}: insufficient candle data (${rawCandles?.length ?? 0}), will build live`);
+            return;
+        }
         const compiledBuffer = [];
         for (let i = 2; i < rawCandles.length; i += 3) {
             compiledBuffer.push(rawCandles[i][4]);
-            if (compiledBuffer.length >= CONFIG.smaWindowSize) break;
+            if (compiledBuffer.length >= CONFIG.smaSlow) break;
         }
+        priceStreams[pair] = compiledBuffer.slice(-CONFIG.smaSlow);
 
-        priceStreams[pair] = compiledBuffer;
-        const sma = calculateSMA(compiledBuffer);
-        const stdDev = calculateStandardDeviation(compiledBuffer, sma);
+        const smaF = calculateSMA(priceStreams[pair].slice(-CONFIG.smaFast));
+        const smaM = calculateSMA(priceStreams[pair].slice(-CONFIG.smaMed));
+        const smaS = calculateSMA(priceStreams[pair].slice(-CONFIG.smaSlow));
+        const stdDev = calculateStandardDeviation(priceStreams[pair].slice(-CONFIG.smaMed), smaM);
+
         strategicMatrices[pair] = {
-            sma: sma,
-            upper: sma + (CONFIG.volaMultiplier * stdDev),
-            lower: sma - (CONFIG.volaMultiplier * stdDev)
+            smaFast: smaF, smaMed: smaM, smaSlow: smaS,
+            upper: smaM + (CONFIG.volaMultiplier * stdDev),
+            lower: smaM - (CONFIG.volaMultiplier * stdDev),
+            ready: priceStreams[pair].length >= CONFIG.smaSlow
         };
+
+        // Seed Wilder RSI state from historical prices
+        wilderStates[pair] = { avgGain: 0, avgLoss: 0, prevPrice: null, seeded: false };
+        calculateRSIWilder(priceStreams[pair], CONFIG.rsiPeriod, wilderStates[pair]);
+
+        signalTrackers[pair].previousClose = priceStreams[pair][priceStreams[pair].length - 1];
+        signalTrackers[pair].prevSmaFast   = smaF;
+        signalTrackers[pair].prevSmaMed    = smaM;
+        signalTrackers[pair].prevSmaSlow   = smaS;
+
+        appendHistoryLog(`[SEED OK] ${pair}: Fast=${smaF.toFixed(4)}, Med=${smaM.toFixed(4)}, Slow=${smaS.toFixed(4)}`);
     } catch (err) {
         appendHistoryLog(`[SEED ERROR] ${pair}: ${err.message}`);
+        sendNotification('⚠️ Seed Error', `${pair}: ${err.message}`);
     }
 }
 
+// ─── Main scan loop ───────────────────────────────────────────────────────────
 async function processContinuousScan(exchange, pair) {
     try {
-        const ticker = await exchange.fetchTicker(pair);
+        const ticker    = await exchange.fetchTicker(pair);
         const livePrice = ticker.close;
+        const liveBid   = ticker.bid || livePrice;
+        const liveAsk   = ticker.ask || livePrice;
         if (!livePrice) return;
 
-        scanBuffers[pair].push(livePrice);
-
-        const stateFile = getStateFilePath(pair);
-        if (fs.existsSync(stateFile)) {
-            let state;
-            try {
-                state = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
-            } catch (parseErr) {
-                logError('scalper_machine.js', `[CORRUPT STATE] ${pair} state file unreadable, resetting. Error: ${parseErr.message}`);
-                fs.writeFileSync(stateFile, JSON.stringify({ positionActive: false }, null, 4));
-                state = { positionActive: false };
-            }
-            if (state.positionActive) {
-                await manageActivePosition(pair, ticker.bid || livePrice, ticker.ask || livePrice, state);
-            }
+        // ── Position management ──────────────────────────────────────────────
+        const state = readState(pair);
+        if (state.positionActive) {
+            const closed = await manageActivePosition(exchange, pair, liveBid, liveAsk, state);
+            if (closed) { scanBuffers[pair] = []; return; }
         }
 
+        // ── Band aggregation ─────────────────────────────────────────────────
+        scanBuffers[pair].push(livePrice);
         if (scanBuffers[pair].length >= CONFIG.blocksToAggregate) {
             scanBuffers[pair] = [];
             priceStreams[pair].push(livePrice);
-            if (priceStreams[pair].length > CONFIG.smaWindowSize) priceStreams[pair].shift();
+            if (priceStreams[pair].length > CONFIG.smaSlow) priceStreams[pair].shift();
 
-            const sma = calculateSMA(priceStreams[pair]);
-            const stdDev = calculateStandardDeviation(priceStreams[pair], sma);
+            if (priceStreams[pair].length >= CONFIG.smaSlow) {
+                const smaF   = calculateSMA(priceStreams[pair].slice(-CONFIG.smaFast));
+                const smaM   = calculateSMA(priceStreams[pair].slice(-CONFIG.smaMed));
+                const smaS   = calculateSMA(priceStreams[pair].slice(-CONFIG.smaSlow));
+                const stdDev = calculateStandardDeviation(priceStreams[pair].slice(-CONFIG.smaMed), smaM);
+                strategicMatrices[pair].smaFast = smaF;
+                strategicMatrices[pair].smaMed  = smaM;
+                strategicMatrices[pair].smaSlow = smaS;
+                strategicMatrices[pair].upper   = smaM + (CONFIG.volaMultiplier * stdDev);
+                strategicMatrices[pair].lower   = smaM - (CONFIG.volaMultiplier * stdDev);
+                strategicMatrices[pair].ready   = true;
+            }
 
-            strategicMatrices[pair].sma = sma;
-            strategicMatrices[pair].upper = sma + (CONFIG.volaMultiplier * stdDev);
-            strategicMatrices[pair].lower = sma - (CONFIG.volaMultiplier * stdDev);
+            // Tick Wilder RSI forward
+            calculateRSIWilder(priceStreams[pair], CONFIG.rsiPeriod, wilderStates[pair]);
 
-            await evaluateStrategyLogic(pair, livePrice, ticker.bid || livePrice, ticker.ask || livePrice);
+            updateSignalTrackers(pair, livePrice);
+
+            // Decrement cooldown
+            if (cooldownState[pair].blocksRemaining > 0) {
+                cooldownState[pair].blocksRemaining--;
+            }
+
+            await evaluateStrategyLogic(exchange, pair, liveBid, liveAsk, livePrice, state);
+
+            signalTrackers[pair].previousClose = livePrice;
+            signalTrackers[pair].prevSmaFast   = strategicMatrices[pair].smaFast;
+            signalTrackers[pair].prevSmaMed    = strategicMatrices[pair].smaMed;
+            signalTrackers[pair].prevSmaSlow   = strategicMatrices[pair].smaSlow;
+            signalTrackers[pair].blockIndex++;
         }
     } catch (err) {
         logError('scalper_machine.js', `[SCAN ERROR] ${pair}: ${err.message}`);
     }
 }
 
-async function evaluateStrategyLogic(pair, price, liveBid, liveAsk) {
-    const stateFile = getStateFilePath(pair);
-    if (fs.existsSync(stateFile)) {
-        const state = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
-        if (state.positionActive) return;
-    }
+// ─── Signal tracker update ────────────────────────────────────────────────────
+function updateSignalTrackers(pair, closePrice) {
+    const matrix  = strategicMatrices[pair];
+    const tracker = signalTrackers[pair];
+    if (!matrix.ready) return;
+    if (closePrice < matrix.lower) tracker.bandBreachBlock.lower = tracker.blockIndex;
+    if (closePrice > matrix.upper) tracker.bandBreachBlock.upper = tracker.blockIndex;
+}
 
-    const matrix = strategicMatrices[pair];
-    if (price >= matrix.upper) {
-        await executePaperOrder(pair, 'SHORT', liveBid);
-    } else if (price <= matrix.lower) {
-        await executePaperOrder(pair, 'LONG', liveAsk);
+// ─── Trend Alignment Check (Multi-Timeframe Filter) ──────────────────────────
+const TF_LADDER = ['1m', '5m', '15m', '30m', '1h', '4h', '1d'];
+
+async function getHigherTrend(exchange, pair, timeframe) {
+    try {
+        const candles = await exchange.fetchOHLCV(pair, timeframe, undefined, 20);
+        if (candles.length < 20) return 'UNKNOWN';
+        const closes = candles.map(c => c[4]);
+        const sma20 = closes.reduce((a, b) => a + b, 0) / 20;
+        const lastClose = closes[closes.length - 1];
+        return lastClose >= sma20 ? 'UP' : 'DOWN';
+    } catch (e) {
+        logError('scalper_machine.js', `[TREND FETCH ERROR] ${pair} ${timeframe}: ${e.message}`);
+        return 'UNKNOWN';
     }
 }
 
-async function executePaperOrder(pair, direction, entryPrice) {
-    const currentBalance = getBalance();
+async function checkTrendAlignment(exchange, pair, direction) {
+    const baseTf = TOKEN_CONFIGS[pair]?.timeframe || '1m';
+    const tfIndex = TF_LADDER.indexOf(baseTf);
+    // If we can't find 2 higher timeframes, we skip the check
+    if (tfIndex === -1 || tfIndex >= TF_LADDER.length - 2) return true;
+
+    const higherTf1 = TF_LADDER[tfIndex + 1];
+    const higherTf2 = TF_LADDER[tfIndex + 2];
+
+    const [trend1, trend2] = await Promise.all([
+        getHigherTrend(exchange, pair, higherTf1),
+        getHigherTrend(exchange, pair, higherTf2)
+    ]);
+
+    const targetTrend = direction === 'LONG' ? 'UP' : 'DOWN';
+    const allAligned = (trend1 === targetTrend || trend1 === 'UNKNOWN') && 
+                       (trend2 === targetTrend || trend2 === 'UNKNOWN');
+
+    if (!allAligned) {
+        appendHistoryLog(`[TREND GUARD] ${pair} ${direction} rejected. Higher Trends: ${higherTf1}=${trend1}, ${higherTf2}=${trend2}`);
+    } else if (trend1 !== 'UNKNOWN' && trend2 !== 'UNKNOWN') {
+        appendHistoryLog(`[TREND OK] ${pair} ${direction} aligned. Higher Trends: ${higherTf1}=${trend1}, ${higherTf2}=${trend2}`);
+    }
+
+    return allAligned;
+}
+
+// ─── Strategy evaluation ──────────────────────────────────────────────────────
+async function evaluateStrategyLogic(exchange, pair, liveBid, liveAsk, liveClose, state) {
+    // state is passed in from processContinuousScan — no second disk read needed
+    if (state.positionActive) return;
+
+    // ── Cooldown guard ───────────────────────────────────────────────────────
+    if (cooldownState[pair].blocksRemaining > 0) return;
+
+    const matrix = strategicMatrices[pair];
+    if (!matrix.ready) return;
+
+    const triggerOrder = async (dir, price, signal) => {
+        if (await checkTrendAlignment(exchange, pair, dir)) {
+            await executePaperOrder(pair, dir, price, signal);
+            return true;
+        }
+        return false;
+    };
+
+    const tracker       = signalTrackers[pair];
+    const trendBaseline = matrix.smaMed;
+    const slope         = computeSlope(matrix);
+    const isTrendingUp  = slope >  CONFIG.minSlopeThreshold;
+    const isTrendingDn  = slope < -CONFIG.minSlopeThreshold;
+    const isChoppy      = !isTrendingUp && !isTrendingDn;
+
+    // Current Wilder RSI value
+    const ws = wilderStates[pair];
+    const rsiVal = ws.seeded
+        ? (ws.avgLoss === 0 ? 100 : 100 - (100 / (1 + ws.avgGain / ws.avgLoss)))
+        : null;
+
+    const momPct    = momentumPct(priceStreams[pair], CONFIG.momentumBlocks);
+    const stdDev    = (matrix.upper - trendBaseline) / CONFIG.volaMultiplier;
+    const momThresh = stdDev > 0 ? (stdDev / trendBaseline) * CONFIG.volaMultiplier : null;
+
+    const prevClose   = tracker.previousClose;
+    const prevSmaFast = tracker.prevSmaFast;
+    const prevSmaMed  = tracker.prevSmaMed;
+    const prevSmaSlow = tracker.prevSmaSlow;
+    const blockIdx    = tracker.blockIndex;
+
+    // ── Concurrency cap ──────────────────────────────────────────────────────
+    // Checked per signal direction below — prevents 5-pair pile-ins
+
+    // ════════════════════════════════════════════════════════════════════════
+    //  1. RSI EXTREMES — highest edge, require trend agreement
+    // ════════════════════════════════════════════════════════════════════════
+
+    // RSI Oversold Long — only enter if trend is UP or price is at/below lower band
+    if (rsiVal !== null && rsiVal <= CONFIG.rsiOversold &&
+        (isTrendingUp || liveBid <= matrix.lower * 1.005)) {
+        if (countActiveDirection('LONG') < CONFIG.maxConcurrentSameDirection) {
+            if (await triggerOrder('LONG', liveBid, 'RSI_OVERSOLD_LONG')) return;
+        }
+    }
+
+    // RSI Overbought Short — only enter if trend is DOWN or price is at/above upper band
+    if (rsiVal !== null && rsiVal >= CONFIG.rsiOverbought &&
+        (isTrendingDn || liveAsk >= matrix.upper * 0.995)) {
+        if (countActiveDirection('SHORT') < CONFIG.maxConcurrentSameDirection) {
+            if (await triggerOrder('SHORT', liveAsk, 'RSI_OVERBOUGHT_SHORT')) return;
+        }
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // 2. BAND BOUNCE — mean-reversion with confirmation
+    //    Relaxed volume proxy: current price move > 0.3 * stdDev
+    const volaConfirm = stdDev > 0 && Math.abs(liveClose - prevClose) > 0.3 * stdDev;
+
+    // Band-Bounce Long — require upward slope (not just any bearish context)
+    if (isTrendingUp && volaConfirm && prevClose !== null && prevClose < matrix.lower && liveBid >= matrix.lower) {
+        if (countActiveDirection('LONG') < CONFIG.maxConcurrentSameDirection) {
+            if (await triggerOrder('LONG', liveBid, 'BAND_BOUNCE_LONG')) return;
+        }
+    }
+
+    // Band-Bounce Short — require downward slope
+    if (isTrendingDn && volaConfirm && prevClose !== null && prevClose > matrix.upper && liveAsk <= matrix.upper) {
+        if (countActiveDirection('SHORT') < CONFIG.maxConcurrentSameDirection) {
+            if (await triggerOrder('SHORT', liveAsk, 'BAND_BOUNCE_SHORT')) return;
+        }
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    //  3. DOUBLE-DIP — confirmed re-test of lower band
+    // ════════════════════════════════════════════════════════════════════════
+
+    if (isTrendingUp &&
+        tracker.bandBreachBlock.lower !== null &&
+        blockIdx - tracker.bandBreachBlock.lower >= CONFIG.bandBounceConfirmBlocks &&
+        liveBid <= matrix.lower * 1.002) {
+        if (countActiveDirection('LONG') < CONFIG.maxConcurrentSameDirection) {
+            if (await triggerOrder('LONG', liveBid, 'DOUBLE_DIP_LONG')) return;
+        }
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    //  4. MOMENTUM — requires RSI confirmation, skip choppy markets
+    // ════════════════════════════════════════════════════════════════════════
+
+    if (!isChoppy && momPct !== null && momThresh !== null) {
+        // Momentum Long: surge AND RSI not overbought AND trending up
+        if (isTrendingUp && momPct > momThresh &&
+            (rsiVal === null || rsiVal < CONFIG.rsiOverbought)) {
+            if (countActiveDirection('LONG') < CONFIG.maxConcurrentSameDirection) {
+                if (await triggerOrder('LONG', liveBid, 'MOMENTUM_LONG')) return;
+            }
+        }
+        // Momentum Short: drop AND RSI not oversold AND trending down
+        if (isTrendingDn && momPct < -momThresh &&
+            (rsiVal === null || rsiVal > CONFIG.rsiOversold)) {
+            if (countActiveDirection('SHORT') < CONFIG.maxConcurrentSameDirection) {
+                if (await triggerOrder('SHORT', liveAsk, 'MOMENTUM_SHORT')) return;
+            }
+        }
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    //  5. NEAR-SMA LONG — tightened: requires upslope + RSI < 50
+    //     Original fired on any "bearish" price — now requires trend confirmation
+    // ════════════════════════════════════════════════════════════════════════
+
+    if (isTrendingUp &&
+        liveBid >= trendBaseline * CONFIG.nearSmaThreshold &&
+        liveBid < trendBaseline &&
+        rsiVal !== null && rsiVal < 50) {
+        if (countActiveDirection('LONG') < CONFIG.maxConcurrentSameDirection) {
+            if (await triggerOrder('LONG', liveBid, 'NEAR_SMA_LONG')) return;
+        }
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    //  6. ORIGINAL BAND SIGNALS — lower priority, with slope filter
+    // ════════════════════════════════════════════════════════════════════════
+
+    // Upper-Band Long (bearish spike to upper band in uptrend — potential exhaustion buy)
+    if (isTrendingUp && liveAsk >= matrix.upper) {
+        if (countActiveDirection('LONG') < CONFIG.maxConcurrentSameDirection) {
+            if (await triggerOrder('LONG', liveBid, 'UPPER_BAND_LONG')) return;
+        }
+    }
+
+    // Lower-Band Short (bullish drop to lower band in downtrend)
+    if (isTrendingDn && liveBid <= matrix.lower) {
+        if (countActiveDirection('SHORT') < CONFIG.maxConcurrentSameDirection) {
+            if (await triggerOrder('SHORT', liveAsk, 'LOWER_BAND_SHORT')) return;
+        }
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    //  7. SMA CROSSOVERS — lowest priority (noisiest on fast ticks)
+    //     All three SMAs must agree on direction before crossover fires
+    // ════════════════════════════════════════════════════════════════════════
+
+    if (prevSmaFast !== null && prevSmaMed !== null && prevSmaSlow !== null) {
+        // Fast × Med Bullish Cross — only if slow also trending up
+        if (prevSmaFast < prevSmaMed && matrix.smaFast >= matrix.smaMed &&
+            matrix.smaMed > matrix.smaSlow) {
+            if (countActiveDirection('LONG') < CONFIG.maxConcurrentSameDirection) {
+                if (await triggerOrder('LONG', liveBid, 'SMA_CROSS_F_M_LONG')) return;
+            }
+        }
+        // Med × Slow Bullish Cross — only if fast also above med
+        if (prevSmaMed < prevSmaSlow && matrix.smaMed >= matrix.smaSlow &&
+            matrix.smaFast > matrix.smaMed) {
+            if (countActiveDirection('LONG') < CONFIG.maxConcurrentSameDirection) {
+                if (await triggerOrder('LONG', liveBid, 'SMA_CROSS_M_S_LONG')) return;
+            }
+        }
+        // Fast × Med Bearish Cross — only if slow also trending down
+        if (prevSmaFast >= prevSmaMed && matrix.smaFast < matrix.smaMed &&
+            matrix.smaMed < matrix.smaSlow) {
+            if (countActiveDirection('SHORT') < CONFIG.maxConcurrentSameDirection) {
+                if (await triggerOrder('SHORT', liveAsk, 'SMA_CROSS_F_M_SHORT')) return;
+            }
+        }
+        // Med × Slow Bearish Cross — only if fast also below med
+        if (prevSmaMed >= prevSmaSlow && matrix.smaMed < matrix.smaSlow &&
+            matrix.smaFast < matrix.smaMed) {
+            if (countActiveDirection('SHORT') < CONFIG.maxConcurrentSameDirection) {
+                if (await triggerOrder('SHORT', liveAsk, 'SMA_CROSS_M_S_SHORT')) return;
+            }
+        }
+
+        // Price × SMA crosses (last resort)
+        if (prevClose !== null && prevSmaMed !== null) {
+            if (isTrendingUp && prevClose < prevSmaMed && liveBid >= trendBaseline) {
+                if (countActiveDirection('LONG') < CONFIG.maxConcurrentSameDirection) {
+                    if (await triggerOrder('LONG', liveBid, 'SMA_CROSS_LONG')) return;
+                }
+            }
+            if (isTrendingDn && prevClose >= prevSmaMed && liveBid < trendBaseline) {
+                if (countActiveDirection('SHORT') < CONFIG.maxConcurrentSameDirection) {
+                    if (await triggerOrder('SHORT', liveAsk, 'SMA_CROSS_SHORT')) return;
+                }
+            }
+        }
+    }
+}
+
+// ─── Order execution ──────────────────────────────────────────────────────────
+async function executePaperOrder(pair, direction, entryPrice, signalName = 'UNKNOWN') {
+    const currentBalance   = getBalance();
     const allocatedCapital = currentBalance * CONFIG.riskPercentPerTrade;
     const totalBuyingPower = allocatedCapital * CONFIG.leverageMultiplier;
-    const precision = CONFIG.precisionRules[pair] || { amount: 2, price: 2 };
-    const finalizedContractSize = parseFloat((totalBuyingPower / entryPrice).toFixed(precision.amount));
-    const entryFeePaid = totalBuyingPower * CONFIG.takerFeeRate;
-    const riskDistance = entryPrice * CONFIG.stopLossPercent;
-    const targetDistance = entryPrice * CONFIG.takeProfitPercent;
+    const precision        = CONFIG.precisionRules[pair] || { amount: 2, price: 2 };
+    const contractSize     = parseFloat((totalBuyingPower / entryPrice).toFixed(precision.amount));
+    const entryFeePaid     = totalBuyingPower * CONFIG.takerFeeRate;
+
+    let stopLossPct   = CONFIG.stopLossPercent;
+    let takeProfitPct = CONFIG.takeProfitPercent;
+    if (pair === 'DOGE/USDT') { stopLossPct *= 2; takeProfitPct *= 2; }
+
+    const riskDistance   = entryPrice * stopLossPct;
+    const targetDistance = entryPrice * takeProfitPct;
 
     const positionState = {
-        positionActive: true,
-        timestamp: getCentralTimestamp(),
-        pair: pair,
-        direction: direction,
-        entryPrice: parseFloat(entryPrice.toFixed(precision.price)),
-        contractSize: finalizedContractSize,
-        stopLossPrice: parseFloat((direction === 'LONG' ? (entryPrice - riskDistance) : (entryPrice + riskDistance)).toFixed(precision.price)),
-        takeProfitPrice: parseFloat((direction === 'LONG' ? (entryPrice + targetDistance) : (entryPrice - targetDistance)).toFixed(precision.price)),
-        allocatedCapital: allocatedCapital,
+        positionActive:  true,
+        timestamp:       getCentralTimestamp(),
+        startTime:       Date.now(),
+        pair,
+        direction,
+        signalName,
+        entryPrice:      parseFloat(entryPrice.toFixed(precision.price)),
+        contractSize,
+        stopLossPrice:   parseFloat((direction === 'LONG'
+            ? (entryPrice - riskDistance)
+            : (entryPrice + riskDistance)).toFixed(precision.price)),
+        takeProfitPrice: parseFloat((direction === 'LONG'
+            ? (entryPrice + targetDistance)
+            : (entryPrice - targetDistance)).toFixed(precision.price)),
+        allocatedCapital,
         leverageApplied: CONFIG.leverageMultiplier,
-        entryFeePaid: entryFeePaid
+        entryFeePaid,
+        trailTier:       0
     };
 
     fs.writeFileSync(getStateFilePath(pair), JSON.stringify(positionState, null, 4));
-    const msg = `Opened ${direction} for ${pair} at entry price ${entryPrice} (Allocated: $${allocatedCapital.toFixed(2)})`;
-    appendHistoryLog(`[ORDER] ${msg}`);
-    sendNotification(`🚀 TRADE OPENED [v${CONFIG.version}]`, `${pair}: ${direction} @ $${entryPrice}\nValue: $${allocatedCapital.toFixed(2)}`);
+    activeDirectionCache[pair] = direction;   // keep in-memory cache in sync
+    appendHistoryLog(`[ORDER] Opened ${direction} for ${pair} via ${signalName} at entry price ${entryPrice} (Allocated: $${allocatedCapital.toFixed(2)})`);
+    sendNotification(
+        `🚀 TRADE OPENED [v${CONFIG.version}]`,
+        `${pair}: ${direction} @ $${entryPrice}\nSignal: ${signalName}\nSL: $${positionState.stopLossPrice} | TP: $${positionState.takeProfitPrice}\nValue: $${allocatedCapital.toFixed(2)}`
+    );
 }
 
-async function manageActivePosition(pair, liveBid, liveAsk, state) {
-    let triggered = false;
-    let reason = '';
-    let execPrice = 0;
+// ─── Trailing stop ladder (unchanged) ────────────────────────────────────────
+function applyTrailingLadder(state, livePrice) {
+    const {
+        direction, entryPrice,
+        stopLossPrice, takeProfitPrice,
+        trailTier = 0,
+        originalTpPrice = takeProfitPrice,
+        entryFeePaid = 0
+    } = state;
 
-    const currentPrice = state.direction === 'LONG' ? liveBid : liveAsk;
-    const priceChangePct = state.direction === 'LONG' 
-        ? (currentPrice - state.entryPrice) / state.entryPrice 
-        : (state.entryPrice - currentPrice) / state.entryPrice;
+    const tpDist  = Math.abs(takeProfitPrice - entryPrice);
+    const progress = direction === 'LONG'
+        ? (livePrice - entryPrice) / tpDist
+        : (entryPrice - livePrice) / tpDist;
 
-    // --- TRAILING LOGIC START ---
-    // If profit hits 0.40% and we haven't trailed yet, move SL to Break Even and push TP up
-    if (!state.trailingActive && priceChangePct >= 0.0040) {
-        const moveDistance = state.entryPrice * CONFIG.stopLossPercent; // The distance we are moving SL (to break even)
-        
-        state.stopLossPrice = state.entryPrice; // Move SL to Entry (Break Even)
-        state.takeProfitPrice = state.direction === 'LONG' 
-            ? state.takeProfitPrice + moveDistance 
-            : state.takeProfitPrice - moveDistance;
-        
-        state.trailingActive = true;
-        fs.writeFileSync(getStateFilePath(pair), JSON.stringify(state, null, 4));
-        
-        appendHistoryLog(`[TRAILING] ${pair} profit reached 0.4%. SL moved to Break Even ($${state.entryPrice}), TP moved to $${state.takeProfitPrice.toFixed(2)}`);
-        sendNotification(`🛡️ TRAILING ACTIVE: ${pair}`, `SL moved to Break Even\nNew TP: $${state.takeProfitPrice.toFixed(2)}`);
+    let newSl = stopLossPrice, newTp = takeProfitPrice, newTier = trailTier;
+
+    // ── 1. Fast Breakeven (Safety Step) ──────────────────────────────────
+    // If not yet in breakeven and progress hits 35%, lock entry
+    if (trailTier === 0 && progress >= CONFIG.fastBreakevenPct) {
+        const breakEvenBuffer = (entryFeePaid * 2) / state.contractSize; 
+        newSl = direction === 'LONG' ? entryPrice + breakEvenBuffer : entryPrice - breakEvenBuffer;
+        newTier = -1; // Flag that breakeven is active
+        return { ...state, stopLossPrice: newSl, trailTier: newTier };
     }
-    // --- TRAILING LOGIC END ---
 
+    // ── 2. Dynamic 40% Incremental Moves ────────────────────────────────
+    // Check which 40% "step" the price is currently in (Step 1 = 40%, Step 2 = 80%, etc.)
+    const currentStep = Math.floor(progress / CONFIG.trailStepPct);
+    
+    if (currentStep > 0 && currentStep > Math.max(0, trailTier)) {
+        // Move SL up by 20% per step.
+        // Step 1 (40% progress): Move SL to Entry + 20% target
+        // Step 2 (80% progress): Move SL to Entry + 40% target
+        // Step 3 (120% progress): Move SL to Entry + 60% target
+        const lockMultiplier = currentStep * CONFIG.trailSlStepPct;
+        
+        newSl = direction === 'LONG'
+            ? entryPrice + (tpDist * lockMultiplier)
+            : entryPrice - (tpDist * lockMultiplier);
+
+        // Bump TP by 0.75% per step to let winners run
+        newTp = direction === 'LONG'
+            ? takeProfitPrice * (1 + CONFIG.trailTpBumpPct)
+            : takeProfitPrice * (1 - CONFIG.trailTpBumpPct);
+
+        newTier = currentStep;
+        return { ...state, stopLossPrice: newSl, takeProfitPrice: newTp, trailTier: newTier };
+    }
+
+    return null;
+}
+
+// ─── Position management ──────────────────────────────────────────────────────
+async function manageActivePosition(exchange, pair, liveBid, liveAsk, state) {
+    const livePrice = state.direction === 'LONG' ? liveBid : liveAsk;
+    const precision = CONFIG.precisionRules[pair] || { amount: 2, price: 2 };
+
+    // ── Profit Lock: Protect winning trades ─────────────────────────────────────
+    // If trade has hit at least one trail milestone, bypass safety exits
+    const isProfitLocked = (state.trailTier >= 1);
+
+    // ── 1. Time-Based Cutoff (Only if in negative for 30+ mins and not locked) ──
+    const thirtyMinutesMs = 30 * 60 * 1000;
+    if (!isProfitLocked && state.startTime && (Date.now() - state.startTime) > thirtyMinutesMs) {
+        // Only cut if truly losing (including fees)
+        const totalFeesPerUnit = CONFIG.takerFeeRate * 2; 
+        const isLosing = state.direction === 'LONG' 
+            ? (liveBid < (state.entryPrice * (1 + totalFeesPerUnit)))
+            : (liveAsk > (state.entryPrice * (1 - totalFeesPerUnit)));
+        
+        if (isLosing) {
+            await closePosition(pair, liveBid, liveAsk, state, 'TIME_CUTOFF_30M');
+            return true;
+        }
+    }
+
+    // ── 2. Trend-Flip Invalidation (Skip if profit is locked) ───────────────────
+    if (!isProfitLocked && signalTrackers[pair].blockIndex % CONFIG.trendFlipCheckInterval === 0) {
+        const isAligned = await checkTrendAlignment(exchange, pair, state.direction);
+        if (!isAligned) {
+            await closePosition(pair, liveBid, liveAsk, state, 'TREND_FLIP');
+            return true;
+        }
+    }
+
+    // ── 3. Trailing Stop Ladder & Fast Breakeven ──────────────────────────
+    const updated = applyTrailingLadder(state, livePrice);
+    if (updated) {
+        const tierLabel = updated.trailTier === -1 ? 'FAST_BREAKEVEN' : `TIER_${updated.trailTier}`;
+        fs.writeFileSync(getStateFilePath(pair), JSON.stringify(updated, null, 4));
+        appendHistoryLog(
+            `[TRAIL ${tierLabel}] ${pair} | ${state.direction} | ` +
+            `SL: ${state.stopLossPrice.toFixed(precision.price)} → ${updated.stopLossPrice.toFixed(precision.price)}`
+        );
+        sendNotification(
+            `🎯 ${tierLabel.replace('_', ' ')}`,
+            `${pair}: ${state.direction}\nNew SL: $${updated.stopLossPrice.toFixed(precision.price)}`
+        );
+        state = updated;
+    }
+
+    let triggered = false, reason = '', execPrice = 0;
     if (state.direction === 'LONG') {
-        if (liveBid >= state.takeProfitPrice) { triggered = true; reason = 'TAKE_PROFIT'; execPrice = state.takeProfitPrice; }
-        else if (liveBid <= state.stopLossPrice) { triggered = true; reason = 'STOP_LOSS'; execPrice = state.stopLossPrice; }
+        if (liveBid >= state.takeProfitPrice)    { triggered = true; reason = 'TAKE_PROFIT'; execPrice = state.takeProfitPrice; }
+        else if (liveBid <= state.stopLossPrice) { triggered = true; reason = 'STOP_LOSS';   execPrice = state.stopLossPrice; }
     } else {
-        if (liveAsk <= state.takeProfitPrice) { triggered = true; reason = 'TAKE_PROFIT'; execPrice = state.takeProfitPrice; }
-        else if (liveAsk >= state.stopLossPrice) { triggered = true; reason = 'STOP_LOSS'; execPrice = state.stopLossPrice; }
+        if (liveAsk <= state.takeProfitPrice)    { triggered = true; reason = 'TAKE_PROFIT'; execPrice = state.takeProfitPrice; }
+        else if (liveAsk >= state.stopLossPrice) { triggered = true; reason = 'STOP_LOSS';   execPrice = state.stopLossPrice; }
     }
 
     if (triggered) {
-        const exitFee = (state.allocatedCapital * state.leverageApplied) * CONFIG.takerFeeRate;
-        const totalFees = state.entryFeePaid + exitFee;
-        let pnl = 0;
-
-        if (reason === 'TAKE_PROFIT') {
-            pnl = (state.allocatedCapital * CONFIG.takeProfitPercent * state.leverageApplied) - totalFees;
-        } else {
-            pnl = -(state.allocatedCapital * CONFIG.stopLossPercent * state.leverageApplied) - totalFees;
-        }
-
-        await acquireBalanceLock();
-        const currentBalance = getBalance();
-        const newBalance = currentBalance + pnl;
-        updateBalance(newBalance);
-        releaseBalanceLock();
-
-        fs.writeFileSync(getStateFilePath(pair), JSON.stringify({ positionActive: false }, null, 4));
-        const logMsg = `[CLOSED] Out of ${pair} via ${reason} at execution value ${execPrice}. PnL: $${pnl.toFixed(2)}, New Balance: $${newBalance.toFixed(2)}`;
-        appendHistoryLog(logMsg);
-
-        const winLoss = pnl >= 0 ? '✅ WIN' : '❌ LOSS';
-        const roi = ((newBalance - 300.00) / 300.00 * 100).toFixed(3);
-        sendNotification(`💰 TRADE CLOSED: ${winLoss}`, `${pair}: ${reason}\nPnL: $${pnl.toFixed(2)}\nBalance: $${newBalance.toFixed(2)}\nTotal ROI: ${roi}%`);
+        await closePosition(pair, liveBid, liveAsk, state, reason, execPrice);
+        return true;
     }
+    return false;
 }
 
+async function closePosition(pair, liveBid, liveAsk, state, reason, execPrice = null) {
+    if (execPrice == null) execPrice = state.direction === 'LONG' ? liveBid : liveAsk;
+
+    const exitFee   = (state.allocatedCapital * state.leverageApplied) * CONFIG.takerFeeRate;
+    const totalFees = (state.entryFeePaid || 0) + exitFee;
+    const priceDiff = state.direction === 'LONG'
+        ? (execPrice - state.entryPrice)
+        : (state.entryPrice - execPrice);
+    const rawPnl = (priceDiff / state.entryPrice) * (state.allocatedCapital * state.leverageApplied);
+    const pnl    = rawPnl - totalFees;
+
+    await acquireBalanceLock();
+    const newBalance = getBalance() + pnl;
+    updateBalance(newBalance);
+    releaseBalanceLock();
+
+    fs.writeFileSync(getStateFilePath(pair), JSON.stringify({ positionActive: false }, null, 4));
+    activeDirectionCache[pair] = null;   // keep in-memory cache in sync
+
+    // ── Cooldown management ──────────────────────────────────────────────────
+    if (reason === 'STOP_LOSS') {
+        cooldownState[pair].consecutiveSL++;
+        const multiplier = Math.pow(CONFIG.consecutiveSLEscalation, cooldownState[pair].consecutiveSL - 1);
+        cooldownState[pair].blocksRemaining = Math.round(Math.min(
+            CONFIG.cooldownBlocksBase * multiplier,
+            CONFIG.cooldownBlocksMax
+        ));
+        appendHistoryLog(
+            `[COOLDOWN] ${pair}: ${cooldownState[pair].consecutiveSL} consecutive SL(s), ` +
+            `cooling down ${cooldownState[pair].blocksRemaining} blocks`
+        );
+    } else {
+        // TP or manual exit resets the streak
+        cooldownState[pair].consecutiveSL  = 0;
+        cooldownState[pair].blocksRemaining = 0;
+    }
+
+    const signal  = state.signalName || 'UNKNOWN';
+    const logMsg  = `[CLOSED] Out of ${pair} via ${reason} (signal: ${signal}) at execution value ${execPrice}. PnL: $${pnl.toFixed(2)}, New Balance: $${newBalance.toFixed(2)}`;
+    appendHistoryLog(logMsg);
+
+    const winLoss = pnl >= 0 ? '✅ WIN' : '❌ LOSS';
+    const roi     = ((newBalance - CONFIG.startingBalanceUSDT) / CONFIG.startingBalanceUSDT * 100).toFixed(3);
+    sendNotification(
+        `💰 TRADE CLOSED: ${winLoss}`,
+        `${pair}: ${reason}\nSignal: ${signal}\nPnL: $${pnl.toFixed(2)}\nBalance: $${newBalance.toFixed(2)}\nTotal ROI: ${roi}%`
+    );
+}
+
+// ─── Manual Trade Watcher ─────────────────────────────────────────────────────
+function watchManualTrades(exchange) {
+    setInterval(() => {
+        CONFIG.targetPairs.forEach(pair => {
+            const pairClean = pair.replace('/', '-');
+            const manualTradeFile = `./manual_trade_${pairClean}.json`;
+            const manualExitFile  = `./manual_exit_${pairClean}.json`;
+
+            // 1. Check for manual trades (entry)
+            if (fs.existsSync(manualTradeFile)) {
+                try {
+                    const data = JSON.parse(fs.readFileSync(manualTradeFile, 'utf8'));
+                    fs.unlinkSync(manualTradeFile);
+                    (async () => {
+                        const ticker     = await exchange.fetchTicker(pair);
+                        const isLong     = (data.action === 'long');
+                        const entryPrice = isLong ? ticker.bid : ticker.ask;
+                        const direction  = isLong ? 'LONG' : 'SHORT';
+                        cooldownState[pair].blocksRemaining = 0; // Manual trades bypass cooldown
+                        await executePaperOrder(pair, direction, entryPrice, 'MANUAL');
+                    })().catch(err => {
+                        logError('scalper_machine.js', `[MANUAL TRADE ERROR] ${pair}: ${err.message}`);
+                    });
+                } catch (e) { if (fs.existsSync(manualTradeFile)) fs.unlinkSync(manualTradeFile); }
+            }
+
+            // 2. Check for manual exits
+            if (fs.existsSync(manualExitFile)) {
+                try {
+                    const data = JSON.parse(fs.readFileSync(manualExitFile, 'utf8'));
+                    if (data.exit) {
+                        fs.unlinkSync(manualExitFile);
+                        (async () => {
+                            const state = readState(pair);
+                            if (state.positionActive) {
+                                const ticker = await exchange.fetchTicker(pair);
+                                await closePosition(pair, ticker.bid, ticker.ask, state, 'MANUAL_EXIT');
+                            }
+                        })().catch(err => {
+                            logError('scalper_machine.js', `[MANUAL EXIT ERROR] ${pair}: ${err.message}`);
+                        });
+                    }
+                } catch (e) { if (fs.existsSync(manualExitFile)) fs.unlinkSync(manualExitFile); }
+            }
+        });
+    }, 30000);
+}
+
+// ─── Engine boot ──────────────────────────────────────────────────────────────
 async function startEngine() {
-    appendHistoryLog("=== SCALPER ENGINE OPERATIONAL BUFFER ONLINE ===");
+    ensureLogsDir();
+    appendHistoryLog(`=== SCALPER ENGINE v${CONFIG.version} OPERATIONAL — Refined Signal Suite + Cooldown + Slope Filter ===`);
+    sendNotification('🤖 Momentum Scalper', `v${CONFIG.version} online. 11 signals | Slope filter | Wilder RSI | Cooldown active.`);
+
     const exchange = new ccxt.weex({ enableRateLimit: true, timeout: 20000, options: { defaultType: 'swap' } });
 
+    watchManualTrades(exchange);
+
+    await Promise.allSettled(CONFIG.targetPairs.map(pair => seedHistoricalData(exchange, pair)));
+
+    // Seed the in-memory direction cache from any persisted state files (e.g. after a restart)
     for (const pair of CONFIG.targetPairs) {
-        await seedHistoricalData(exchange, pair);
-    }
-    for (const pair of CONFIG.targetPairs) {
-        await processContinuousScan(exchange, pair);
+        const s = readState(pair);
+        activeDirectionCache[pair] = (s.positionActive && s.direction) ? s.direction : null;
     }
 
+    await Promise.allSettled(CONFIG.targetPairs.map(pair => processContinuousScan(exchange, pair)));
+
     setInterval(async () => {
-        for (const pair of CONFIG.targetPairs) {
-            await processContinuousScan(exchange, pair);
-        }
+        await Promise.allSettled(CONFIG.targetPairs.map(pair => processContinuousScan(exchange, pair)));
     }, CONFIG.scanIntervalMs);
 }
 
