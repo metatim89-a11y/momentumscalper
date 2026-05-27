@@ -72,6 +72,8 @@ const CONFIG = {
         'ADA/USDT': { amount: 1, price: 6 },
         'DOGE/USDT': { amount: 0, price: 6 }
     },
+    // Mode: 'trend' (original) or 'reversal' (mean reversion)
+    signalMode: 'trend', 
     // Step-Trailing Stop Logic
     trailStepPct: 0.40,      // Milestone every 40% progress
     trailSlStepPct: 0.20,    // Move SL up by 20% of target distance per step
@@ -369,17 +371,20 @@ async function checkTrendAlignment(exchange, pair, direction) {
     ]);
 
     const targetTrend = direction === 'LONG' ? 'UP' : 'DOWN';
-    const allAligned = (trend1 === targetTrend || trend1 === 'UNKNOWN') && 
-                       (trend2 === targetTrend || trend2 === 'UNKNOWN');
+    const oppositeTrend = direction === 'LONG' ? 'DOWN' : 'UP';
+
+    // Only invalidate if BOTH timeframes are explicitly against us.
+    // If either is 'UNKNOWN' or matches our direction, we keep the trade open.
+    const isContradicted = (trend1 === oppositeTrend && trend2 === oppositeTrend);
+    const allAligned = !isContradicted;
 
     if (!allAligned) {
-        appendHistoryLog(`[TREND GUARD] ${pair} ${direction} rejected. Higher Trends: ${higherTf1}=${trend1}, ${higherTf2}=${trend2}`);
-    } else if (trend1 !== 'UNKNOWN' && trend2 !== 'UNKNOWN') {
-        appendHistoryLog(`[TREND OK] ${pair} ${direction} aligned. Higher Trends: ${higherTf1}=${trend1}, ${higherTf2}=${trend2}`);
+        appendHistoryLog(`[TREND GUARD] ${pair} ${direction} CONTRADICTED. Higher Trends: ${higherTf1}=${trend1}, ${higherTf2}=${trend2}`);
+    } else {
+        appendHistoryLog(`[TREND GUARD] ${pair} ${direction} OK. Higher Trends: ${higherTf1}=${trend1}, ${higherTf2}=${trend2}`);
     }
 
-    return allAligned;
-}
+    return allAligned;}
 
 // ─── Strategy evaluation ──────────────────────────────────────────────────────
 async function evaluateStrategyLogic(exchange, pair, liveBid, liveAsk, liveClose, state) {
@@ -514,20 +519,25 @@ async function evaluateStrategyLogic(exchange, pair, liveBid, liveAsk, liveClose
     }
 
     // ════════════════════════════════════════════════════════════════════════
-    //  6. ORIGINAL BAND SIGNALS — lower priority, with slope filter
+    //  6. BAND SIGNALS — Configurable Mode (Trend or Reversal)
     // ════════════════════════════════════════════════════════════════════════
+    const isReversal = CONFIG.signalMode === 'reversal';
 
-    // Upper-Band Long (bearish spike to upper band in uptrend — potential exhaustion buy)
+    // Upper-Band Logic
     if (isTrendingUp && liveAsk >= matrix.upper) {
-        if (countActiveDirection('LONG') < CONFIG.maxConcurrentSameDirection) {
-            if (await triggerOrder('LONG', liveBid, 'UPPER_BAND_LONG')) return;
+        const dir = isReversal ? 'SHORT' : 'LONG';
+        const name = isReversal ? 'UPPER_BAND_REVERSAL_SHORT' : 'UPPER_BAND_LONG';
+        if (countActiveDirection(dir) < CONFIG.maxConcurrentSameDirection) {
+            if (await triggerOrder(dir, dir === 'LONG' ? liveBid : liveAsk, name)) return;
         }
     }
 
-    // Lower-Band Short (bullish drop to lower band in downtrend)
+    // Lower-Band Logic
     if (isTrendingDn && liveBid <= matrix.lower) {
-        if (countActiveDirection('SHORT') < CONFIG.maxConcurrentSameDirection) {
-            if (await triggerOrder('SHORT', liveAsk, 'LOWER_BAND_SHORT')) return;
+        const dir = isReversal ? 'LONG' : 'SHORT';
+        const name = isReversal ? 'LOWER_BAND_REVERSAL_LONG' : 'LOWER_BAND_SHORT';
+        if (countActiveDirection(dir) < CONFIG.maxConcurrentSameDirection) {
+            if (await triggerOrder(dir, dir === 'LONG' ? liveBid : liveAsk, name)) return;
         }
     }
 
@@ -840,7 +850,7 @@ function watchManualTrades(exchange) {
                 } catch (e) { if (fs.existsSync(manualExitFile)) fs.unlinkSync(manualExitFile); }
             }
         });
-    }, 30000);
+    }, 1000);
 }
 
 // ─── Engine boot ──────────────────────────────────────────────────────────────

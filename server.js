@@ -331,6 +331,18 @@ const PAIR_TIMEFRAME_MAP = {
                 return;
             }
 
+            // ── Bot Configuration/Control ──────────────────────────────────
+            if (action === 'toggleMode') {
+                // Read current machine config to toggle mode
+                const content = fs.readFileSync('scalper_machine.js', 'utf8');
+                const newContent = content.replace(/signalMode: '\w+'/, `signalMode: '${payload.value}'`);
+                fs.writeFileSync('scalper_machine.js', newContent);
+                notify('⚙️ Strategy Mode', `Bot mode set to: ${payload.value}`, 'scalper_ctrl');
+                res.writeHead(200);
+                res.end(JSON.stringify({ status: `Mode set to ${payload.value}` }));
+                return;
+            }
+
             // ── Bot controls ───────────────────────────────────────────────
             if (action === 'start') {
                 exec('node scalper_machine.js > .logs/scalper_machine.log 2>&1 &');
