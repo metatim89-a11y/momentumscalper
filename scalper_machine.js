@@ -41,17 +41,28 @@ const TOKEN_CONFIGS = {
     'AVAX/USDT': { sl: 0.0025, tp: 0.0060, rsiLow: 30, rsiHigh: 70, timeframe: '30m' },
     'LTC/USDT':  { sl: 0.0025, tp: 0.0060, rsiLow: 30, rsiHigh: 70, timeframe: '15m' },
     'TRX/USDT':  { sl: 0.0025, tp: 0.0060, rsiLow: 30, rsiHigh: 70, timeframe: '15m' },
-    'MATIC/USDT':{ sl: 0.0025, tp: 0.0060, rsiLow: 30, rsiHigh: 70, timeframe: '15m' },
     'NEAR/USDT': { sl: 0.0025, tp: 0.0060, rsiLow: 30, rsiHigh: 70, timeframe: '15m' },
     'FIL/USDT':  { sl: 0.0025, tp: 0.0060, rsiLow: 30, rsiHigh: 70, timeframe: '15m' },
-    'ATOM/USDT': { sl: 0.0025, tp: 0.0060, rsiLow: 30, rsiHigh: 70, timeframe: '15m' }
+    'ATOM/USDT': { sl: 0.0025, tp: 0.0060, rsiLow: 30, rsiHigh: 70, timeframe: '15m' },
+    'BONK/USDT': { sl: 0.0030, tp: 0.0075, rsiLow: 25, rsiHigh: 75, timeframe: '5m' },
+    'WIF/USDT':  { sl: 0.0030, tp: 0.0075, rsiLow: 25, rsiHigh: 75, timeframe: '5m' },
+    'PENGU/USDT':{ sl: 0.0030, tp: 0.0075, rsiLow: 25, rsiHigh: 75, timeframe: '5m' },
+    'FART/USDT': { sl: 0.0030, tp: 0.0075, rsiLow: 25, rsiHigh: 75, timeframe: '5m' },
+    'TRUMP/USDT':{ sl: 0.0030, tp: 0.0075, rsiLow: 25, rsiHigh: 75, timeframe: '5m' },
+    'POPCAT/USDT':{ sl: 0.0030, tp: 0.0075, rsiLow: 25, rsiHigh: 75, timeframe: '5m' },
+    'PNUT/USDT': { sl: 0.0030, tp: 0.0075, rsiLow: 25, rsiHigh: 75, timeframe: '5m' },
+    'PIPPIN/USDT':{ sl: 0.0030, tp: 0.0075, rsiLow: 25, rsiHigh: 75, timeframe: '5m' },
+    'AI16Z/USDT':{ sl: 0.0030, tp: 0.0075, rsiLow: 25, rsiHigh: 75, timeframe: '5m' },
+    'BOME/USDT': { sl: 0.0030, tp: 0.0075, rsiLow: 25, rsiHigh: 75, timeframe: '5m' },
+    'PONKE/USDT':{ sl: 0.0030, tp: 0.0075, rsiLow: 25, rsiHigh: 75, timeframe: '5m' },
+    'MOODENG/USDT':{ sl: 0.0030, tp: 0.0075, rsiLow: 25, rsiHigh: 75, timeframe: '5m' }
 };
 
 const CONFIG = {
   takeProfitPercent: 0.0100,
   stopLossPercent: 0.0030,
   version: '3.1.0',
-  targetPairs: ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'ADA/USDT', 'DOGE/USDT', 'LTC/USDT', 'TRX/USDT', 'MATIC/USDT', 'NEAR/USDT', 'FIL/USDT', 'ATOM/USDT'],
+  targetPairs: ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'ADA/USDT', 'DOGE/USDT', 'LTC/USDT', 'TRX/USDT', 'NEAR/USDT', 'FIL/USDT', 'ATOM/USDT'],
   scanIntervalMs: 2000,
   blocksToAggregate: 3,
   startingBalanceUSDT: 300.00,
@@ -79,15 +90,33 @@ const CONFIG = {
       'DOGE/USDT': { amount: 0, price: 6 },
       'LTC/USDT':  { amount: 2, price: 3 },
       'TRX/USDT':  { amount: 0, price: 5 },
-      'MATIC/USDT':{ amount: 1, price: 4 },
       'NEAR/USDT': { amount: 1, price: 3 },
       'FIL/USDT':  { amount: 1, price: 3 },
       'ATOM/USDT': { amount: 2, price: 3 }
   },
-  signalMode: 'trend',
-  fastBreakevenPct: 0.35,
-};
-// ── Signal Filtering (Phase 3) ──────────────────────────────────────────────
+  signalMode: 'reversal',
+  fastBreakevenPct: 0.08,
+  timeCutoffMs: Infinity,
+  trendFlipCheckInterval: Infinity,
+  breakevenProfitBuffer: 0.0003,
+  trailBaseTrigger: 0.27,
+  trailIncrement: 0.15,
+  trailSlLockBase: 0.17,
+  trailSlLockIncrement: 0.05,
+  trailTpBump: 0.32,
+  };
+
+  const DEFAULT_TRAILING_CONFIG = {
+  activated: false,
+  baseTrigger: 0.27,
+  increment: 0.15,
+  slLockBase: 0.17,
+  slLockIncrement: 0.05,
+  tpBump: 0.32
+  };
+  const TRAILING_CONFIG = DEFAULT_TRAILING_CONFIG;
+
+  // ── Signal Filtering (Phase 3) ──────────────────────────────────────────────
 const ACTIVE_SIGNALS = {
   RSI_OVERBOUGHT_SHORT: true,
   RSI_OVERSOLD_LONG: true,
@@ -656,7 +685,9 @@ async function executePaperOrder(pair, direction, entryPrice, signalName = 'UNKN
     await acquireBalanceLock();
     const currentBalance   = getBalance();
     releaseBalanceLock();
-    const allocatedCapital = CONFIG.fixedPositionSizeUSDT;
+    
+    // Risk 5% of balance per trade
+    const allocatedCapital = currentBalance * 0.05;
     const totalBuyingPower = allocatedCapital * CONFIG.leverageMultiplier;
     const precision        = CONFIG.precisionRules[pair] || { amount: 2, price: 2 };
     const contractSize     = parseFloat((totalBuyingPower / entryPrice).toFixed(precision.amount));
@@ -703,8 +734,9 @@ async function executePaperOrder(pair, direction, entryPrice, signalName = 'UNKN
 //
 // How it works:
 //   Tier 0 / Breakeven:
-//     Once price reaches fastBreakevenPct (35%) of the original TP distance,
+//     Once price reaches fastBreakevenPct (8%) of the original TP distance,
 //     SL moves to entry + fee buffer. Fires once only.
+
 //
 //   Tier 1, 2, 3 ... N (no cap):
 //     After breakeven, a new tier fires whenever price travels trailStepPct (40%)
@@ -724,7 +756,6 @@ function applyTrailingLadder(state, livePrice) {
         stopLossPrice, takeProfitPrice,
         trailTier       = 0,
         breakevenActive = false,
-        tpAnchor        = takeProfitPrice,
         entryFeePaid    = 0
     } = state;
 
@@ -736,10 +767,11 @@ function applyTrailingLadder(state, livePrice) {
             : (entryPrice - livePrice) / originalTpDist;
 
         if (progress >= CONFIG.fastBreakevenPct) {
-            const breakEvenBuffer = (entryFeePaid * 2) / state.contractSize;
+            const profitBuffer = 0.0003;
+            const breakEvenBuffer = (entryFeePaid * 2) / state.contractSize + profitBuffer;
             const newSl = direction === 'LONG'
-                ? entryPrice + breakEvenBuffer
-                : entryPrice - breakEvenBuffer;
+                ? entryPrice * (1 + breakEvenBuffer)
+                : entryPrice * (1 - breakEvenBuffer);
             return {
                 ...state,
                 stopLossPrice:   newSl,
@@ -750,33 +782,22 @@ function applyTrailingLadder(state, livePrice) {
         return null;
     }
 
-    // ── 2. Tiered advancement (based on TRAILING_CONFIG) ───────────────────
+    // ── 2. Unlimited Tiered Advancement ───────────────────────────────────
+    // Using a progressive formula: trigger increases with each tier
     const distToTarget = Math.abs(takeProfitPrice - entryPrice);
     const progress     = direction === 'LONG'
         ? (livePrice - entryPrice) / distToTarget
         : (entryPrice - livePrice) / distToTarget;
 
-    let trigger = 0;
-    let slLock  = 0;
-    let tpBump  = 0;
-    let nextTier = trailTier + 1;
-
-    if (nextTier === 1) {
-        trigger = TRAILING_CONFIG.tier1Trigger;
-        slLock  = TRAILING_CONFIG.tier1SlLock;
-        tpBump  = TRAILING_CONFIG.tier1TpBump;
-    } else if (nextTier === 2) {
-        trigger = TRAILING_CONFIG.tier2Trigger;
-        slLock  = TRAILING_CONFIG.tier2SlLock;
-        tpBump  = TRAILING_CONFIG.tier2TpBump;
-    } else {
-        trigger = TRAILING_CONFIG.tier3Trigger;
-        slLock  = TRAILING_CONFIG.tier3SlLock;
-        tpBump  = TRAILING_CONFIG.tier3TpBump;
-    }
+    // Formula: trigger = baseTrigger + (tier * incrementalFactor)
+    const baseTrigger = 0.27; // Tier 1 trigger
+    const increment   = 0.15; // Tier trigger steps
+    const nextTier    = trailTier + 1;
+    const trigger     = baseTrigger + ((nextTier - 1) * increment);
 
     if (progress >= trigger) {
-        // Calculate new SL based on progress lock percentage
+        // SL locks in higher as trade progresses
+        const slLock = 0.17 + ((nextTier - 1) * 0.05);
         const newSl = direction === 'LONG'
             ? entryPrice + (distToTarget * slLock)
             : entryPrice - (distToTarget * slLock);
@@ -785,7 +806,8 @@ function applyTrailingLadder(state, livePrice) {
         const slImproved = direction === 'LONG' ? newSl > stopLossPrice : newSl < stopLossPrice;
         if (!slImproved) return null;
 
-        // Bump TP
+        // Bump TP by a factor to keep it open
+        const tpBump = 0.32; 
         const newTp = direction === 'LONG'
             ? takeProfitPrice * (1 + tpBump)
             : takeProfitPrice * (1 - tpBump);
@@ -872,22 +894,26 @@ async function manageActivePosition(exchange, pair, liveBid, liveAsk, state) {
     }
 
     // ── 3. Trailing Stop Ladder & Fast Breakeven ──────────────────────────
-    const updated = applyTrailingLadder(state, livePrice);
-    if (updated) {
-        // FIX: breakevenActive replaces trailTier === -1 as the breakeven sentinel
-        const tierLabel = (updated.breakevenActive && !state.breakevenActive)
-            ? 'FAST_BREAKEVEN'
-            : `TIER_${updated.trailTier}`;
-        fs.writeFileSync(getStateFilePath(pair), JSON.stringify(updated, null, 4));
-        appendHistoryLog(
-            `[TRAIL ${tierLabel}] ${pair} | ${state.direction} | ` +
-            `SL: ${state.stopLossPrice.toFixed(precision.price)} → ${updated.stopLossPrice.toFixed(precision.price)}`
-        );
-        sendNotification(
-            `🎯 ${tierLabel.replace('_', ' ')}`,
-            `${pair}: ${state.direction}\nNew SL: $${updated.stopLossPrice.toFixed(precision.price)}`
-        );
-        state = updated;
+    try {
+        const updated = applyTrailingLadder(state, livePrice);
+        if (updated) {
+            // FIX: breakevenActive replaces trailTier === -1 as the breakeven sentinel
+            const tierLabel = (updated.breakevenActive && !state.breakevenActive)
+                ? 'FAST_BREAKEVEN'
+                : `TIER_${updated.trailTier}`;
+            fs.writeFileSync(getStateFilePath(pair), JSON.stringify(updated, null, 4));
+            appendHistoryLog(
+                `[TRAIL ${tierLabel}] ${pair} | ${state.direction} | ` +
+                `SL: ${state.stopLossPrice.toFixed(precision.price)} → ${updated.stopLossPrice.toFixed(precision.price)}`
+            );
+            sendNotification(
+                `🎯 ${tierLabel.replace('_', ' ')}`,
+                `${pair}: ${state.direction}\nNew SL: $${updated.stopLossPrice.toFixed(precision.price)}`
+            );
+            state = updated;
+        }
+    } catch (e) {
+        logError('scalper_machine.js', `[TRAILING STOP ERROR] ${pair}: ${e.message}`);
     }
 
     let triggered = false, reason = '', execPrice = 0;
@@ -907,13 +933,24 @@ async function manageActivePosition(exchange, pair, liveBid, liveAsk, state) {
 }
 
 async function closePosition(pair, liveBid, liveAsk, state, reason, execPrice = null) {
-    if (execPrice == null) execPrice = state.direction === 'LONG' ? liveBid : liveAsk;
+    let priceToUse = execPrice;
+    if (priceToUse == null) {
+        priceToUse = state.direction === 'LONG' ? liveBid : liveAsk;
+    } else {
+        // Sanity check: ensure execPrice is not wildly erratic
+        const maxAllowed = state.entryPrice * 2; // Limit to 100% gain/loss
+        const minAllowed = state.entryPrice * 0.5;
+        if (priceToUse > maxAllowed || priceToUse < minAllowed) {
+            priceToUse = state.direction === 'LONG' ? liveBid : liveAsk;
+        }
+    }
+    const execPriceEffective = priceToUse;
 
     const exitFee   = (state.allocatedCapital * state.leverageApplied) * CONFIG.takerFeeRate;
     const totalFees = (state.entryFeePaid || 0) + exitFee;
     const priceDiff = state.direction === 'LONG'
-        ? (execPrice - state.entryPrice)
-        : (state.entryPrice - execPrice);
+        ? (execPriceEffective - state.entryPrice)
+        : (state.entryPrice - execPriceEffective);
     const rawPnl = (priceDiff / state.entryPrice) * (state.allocatedCapital * state.leverageApplied);
     const pnl    = rawPnl - totalFees;
 
@@ -944,7 +981,7 @@ async function closePosition(pair, liveBid, liveAsk, state, reason, execPrice = 
     }
 
     const signal  = state.signalName || 'UNKNOWN';
-    const logMsg  = `[CLOSED] Out of ${pair} via ${reason} (signal: ${signal}) at execution value ${execPrice}. PnL: $${pnl.toFixed(2)}, New Balance: $${newBalance.toFixed(2)}`;
+    const logMsg  = `[CLOSED] Out of ${pair} via ${reason} (signal: ${signal}) at execution value ${execPriceEffective}. PnL: $${pnl.toFixed(2)}, New Balance: $${newBalance.toFixed(2)}`;
     appendHistoryLog(logMsg);
 
     const winLoss = pnl >= 0 ? '✅ WIN' : '❌ LOSS';
@@ -1000,7 +1037,7 @@ function watchManualTrades(exchange) {
                 } catch (e) { if (fs.existsSync(manualExitFile)) fs.unlinkSync(manualExitFile); }
             }
         });
-    }, 1000);
+    }, 200);
 }
 
 // ─── Engine boot ──────────────────────────────────────────────────────────────

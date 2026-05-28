@@ -15,7 +15,7 @@ const ccxt  = require('ccxt');
 const { execSync, exec } = require('child_process');
 
 const PORT  = 3000;
-const PAIRS = ['BTC-USDT', 'ETH-USDT', 'SOL-USDT', 'ADA-USDT', 'DOGE-USDT', 'XRP-USDT', 'BNB-USDT', 'LINK-USDT', 'DOT-USDT', 'AVAX-USDT', 'LTC-USDT', 'TRX-USDT', 'MATIC-USDT', 'NEAR-USDT', 'FIL-USDT', 'ATOM-USDT'];
+const PAIRS = ['BTC-USDT', 'ETH-USDT', 'SOL-USDT', 'ADA-USDT', 'DOGE-USDT', 'XRP-USDT', 'BNB-USDT', 'LINK-USDT', 'DOT-USDT', 'AVAX-USDT', 'LTC-USDT', 'TRX-USDT', 'NEAR-USDT', 'FIL-USDT', 'ATOM-USDT', 'BONK-USDT', 'WIF-USDT', 'JUP-USDT', 'PENG-USDT', 'BREAD-USDT'];
 
 const exchange = new ccxt.weex({ enableRateLimit: true, timeout: 8000 });
 
@@ -98,8 +98,9 @@ const PAIR_TIMEFRAME_MAP = {
     'BTC/USDT': '15m', 'ETH/USDT': '15m', 'SOL/USDT': '5m',
     'ADA/USDT': '5m', 'DOGE/USDT': '30m', 'XRP/USDT': '30m',
     'BNB/USDT': '15m', 'LINK/USDT': '30m', 'DOT/USDT': '15m', 'AVAX/USDT': '30m',
-    'LTC/USDT': '15m', 'TRX/USDT': '15m', 'MATIC/USDT': '15m', 'NEAR/USDT': '15m',
-    'FIL/USDT': '15m', 'ATOM/USDT': '15m'
+    'LTC/USDT': '15m', 'TRX/USDT': '15m', 'NEAR/USDT': '15m',
+    'FIL/USDT': '15m', 'ATOM/USDT': '15m',
+    'BONK/USDT': '5m', 'WIF/USDT': '5m', 'JUP/USDT': '5m', 'PENG/USDT': '5m', 'BREAD/USDT': '5m'
 };
 
 // ─── HTTP server ──────────────────────────────────────────────────────────────
@@ -177,6 +178,7 @@ const server = http.createServer(async (req, res) => {
                 const trades     = [];
                 const history    = [];
                 const dailyStats = {};
+                const activeOrders = {};
 
                 lines.forEach(line => {
                     if (!line.trim()) return;
@@ -190,6 +192,13 @@ const server = http.createServer(async (req, res) => {
                     if (ts < dailyStats[dk].first) dailyStats[dk].first = ts;
                     if (ts > dailyStats[dk].last)  dailyStats[dk].last  = ts;
 
+                    // Track active order capital for PnL% calculation
+                    const orderM = line.match(/\[ORDER\] Opened \w+ for (\S+) via .* \(Allocated: \$(\d+\.\d+)\)/);
+                    if (orderM) {
+                        const [_, pair, alloc] = orderM;
+                        activeOrders[pair] = parseFloat(alloc);
+                    }
+
                     if (line.includes('[CLOSED]')) {
                         const pnlM = line.match(/PnL: \$(-?\d+\.\d+)/);
                         const prM  = line.match(/Out of (\S+) via/);
@@ -198,12 +207,17 @@ const server = http.createServer(async (req, res) => {
                         const blM  = line.match(/New Balance: \$(\d+\.\d+)/);
                         if (pnlM && prM) {
                             const pnl = parseFloat(pnlM[1]);
+                            const pair = prM[1];
+                            const allocated = activeOrders[pair] || 50.00; // Fallback
+                            const pnlPct = (pnl / allocated) * 100;
+                            
                             trades.push({
                                 time:    ts.toLocaleString(),
-                                pair:    prM[1],
+                                pair:    pair,
                                 signal:  sgM ? sgM[1] : '—',
                                 reason:  rsM ? rsM[1] : 'Unknown',
                                 pnl,
+                                pnlPct,
                                 balance: blM ? parseFloat(blM[1]) : null
                             });
                             dailyStats[dk].pnl   += pnl;
@@ -287,7 +301,18 @@ const server = http.createServer(async (req, res) => {
         return;
     }
 
-    // ── Get Active Mode ──────────────────────────────────────────────────────────
+    // ── Get Wallet Config ──────────────────────────────────────────────────────────
+    if (req.url === '/api/wallets' && req.method === 'GET') {
+        let wallets = { hostAddress: '', profitWalletAddress: '' };
+        try {
+            if (fs.existsSync('wallets.json')) {
+                wallets = JSON.parse(fs.readFileSync('wallets.json', 'utf8'));
+            }
+        } catch (_) {}
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(wallets));
+        return;
+    }
     if (req.url === '/api/mode' && req.method === 'GET') {
         let mode = 'trend';
         try {
@@ -390,7 +415,13 @@ const server = http.createServer(async (req, res) => {
                     'takeProfitPercent', 'rsiOversold', 'rsiOverbought', 'volaMultiplier',
                     'nearSmaThreshold', 'minSlopeThreshold', 'maxConcurrentSameDirection',
                     'cooldownBlocksBase', 'cooldownBlocksMax', 'fastBreakevenPct',
-                    'trailStepPct', 'trailSlStepPct', 'trailTpBumpPct', 'takerFeeRate'
+                    'trailStepPct', 'trailSlStepPct', 'trailTpBumpPct', 'takerFeeRate',
+                    'smaFast', 'smaMed', 'smaSlow',
+                    'tier1Trigger', 'tier1SlLock', 'tier1TpBump',
+                    'tier2Trigger', 'tier2SlLock', 'tier2TpBump',
+                    'rsiPeriod', 'momentumBlocks', 'bandBounceConfirmBlocks',
+                    'fastBreakevenPct', 'trailBaseTrigger', 'trailIncrement',
+                    'trailSlLockBase', 'trailSlLockIncrement', 'trailTpBump'
                 ]);
 
                 for (const [key, value] of Object.entries(payload)) {
@@ -430,13 +461,15 @@ const server = http.createServer(async (req, res) => {
             // ── Bot controls ───────────────────────────────────────────────
             if (action === 'start') {
                 exec('node scalper_machine.js > .logs/scalper_machine.log 2>&1 &');
-                notify('🤖 Bot Started', 'Scalper engine starting up', 'scalper_ctrl');
+                exec('node strategy_agent.js > .logs/strategy_agent.log 2>&1 &');
+                notify('🤖 Bot Started', 'Scalper engine and Strategy agent starting up', 'scalper_ctrl');
             } else if (action === 'stop') {
                 exec('pkill -f "node scalper_machine.js"');
-                notify('🛑 Bot Stopped', 'Scalper engine stopped', 'scalper_ctrl');
+                exec('pkill -f "node strategy_agent.js"');
+                notify('🛑 Bot Stopped', 'Scalper engine and Strategy agent stopped', 'scalper_ctrl');
             } else if (action === 'restart') {
-                exec('pkill -f "node scalper_machine.js" && sleep 1 && node scalper_machine.js > .logs/scalper_machine.log 2>&1 &');
-                notify('🔄 Bot Restarted', 'Scalper engine restarting', 'scalper_ctrl');
+                exec('pkill -f "node scalper_machine.js" && pkill -f "node strategy_agent.js" && sleep 1 && node scalper_machine.js > .logs/scalper_machine.log 2>&1 & && node strategy_agent.js > .logs/strategy_agent.log 2>&1 &');
+                notify('🔄 Bot Restarted', 'Scalper engine and Strategy agent restarting', 'scalper_ctrl');
             } else if (action === 'reset') {
                 exec('pkill -f "node scalper_machine.js"');
                 if (fs.existsSync('account_balance.json'))

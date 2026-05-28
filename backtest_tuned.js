@@ -25,7 +25,19 @@ const TOKEN_CONFIGS = {
     'ETH/USDT': { sl: 0.0025, tp: 0.0060, rsiLow: 30, rsiHigh: 70, timeframe: '1h' },
     'SOL/USDT': { sl: 0.0025, tp: 0.0060, rsiLow: 30, rsiHigh: 70, timeframe: '1h' },
     'ADA/USDT': { sl: 0.0025, tp: 0.0060, rsiLow: 30, rsiHigh: 70, timeframe: '1h' },
-    'DOGE/USDT': { sl: 0.0030, tp: 0.0075, rsiLow: 25, rsiHigh: 75, timeframe: '1h' }
+    'DOGE/USDT': { sl: 0.0030, tp: 0.0075, rsiLow: 25, rsiHigh: 75, timeframe: '1h' },
+    'BONK/USDT': { sl: 0.0030, tp: 0.0075, rsiLow: 25, rsiHigh: 75, timeframe: '1h' },
+    'WIF/USDT':  { sl: 0.0030, tp: 0.0075, rsiLow: 25, rsiHigh: 75, timeframe: '1h' },
+    'PENGU/USDT':{ sl: 0.0030, tp: 0.0075, rsiLow: 25, rsiHigh: 75, timeframe: '1h' },
+    'FART/USDT': { sl: 0.0030, tp: 0.0075, rsiLow: 25, rsiHigh: 75, timeframe: '1h' },
+    'TRUMP/USDT':{ sl: 0.0030, tp: 0.0075, rsiLow: 25, rsiHigh: 75, timeframe: '1h' },
+    'POPCAT/USDT':{ sl: 0.0030, tp: 0.0075, rsiLow: 25, rsiHigh: 75, timeframe: '1h' },
+    'PNUT/USDT': { sl: 0.0030, tp: 0.0075, rsiLow: 25, rsiHigh: 75, timeframe: '1h' },
+    'PIPPIN/USDT':{ sl: 0.0030, tp: 0.0075, rsiLow: 25, rsiHigh: 75, timeframe: '1h' },
+    'AI16Z/USDT':{ sl: 0.0030, tp: 0.0075, rsiLow: 25, rsiHigh: 75, timeframe: '1h' },
+    'BOME/USDT': { sl: 0.0030, tp: 0.0075, rsiLow: 25, rsiHigh: 75, timeframe: '1h' },
+    'PONKE/USDT':{ sl: 0.0030, tp: 0.0075, rsiLow: 25, rsiHigh: 75, timeframe: '1h' },
+    'MOODENG/USDT':{ sl: 0.0030, tp: 0.0075, rsiLow: 25, rsiHigh: 75, timeframe: '1h' }
 };
 
 const MIN_ROI = 0.5;
