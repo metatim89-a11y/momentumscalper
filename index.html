@@ -251,20 +251,69 @@
 
         .history-item:last-child { border-bottom: none; }
 
-        .side-by-side {
-            display: grid;
-            grid-template-columns: 1.2fr 1fr;
-            gap: 1.5rem;
+        /* ── Active Positions row ── */
+        .positions-row {
             margin-bottom: 2.5rem;
         }
-
-        .performance-container {
+        .positions-row h2 {
+            font-size: 1.25rem;
+            margin-bottom: 1rem;
+        }
+        #positions-grid {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 1rem;
+        }
+        #positions-grid .position-card {
+            flex: 0 0 320px;   /* fixed width — no stretching */
+            max-width: 320px;
             background: var(--card-bg);
             border-radius: 0.75rem;
             border: 1px solid var(--border);
             padding: 1.5rem;
-            margin-bottom: 2.5rem;
+            position: relative;
+            overflow: hidden;
         }
+
+        /* ── Tables section: full-width stack ── */
+        .tables-section {
+            display: flex;
+            flex-direction: column;
+            gap: 2rem;
+        }
+        .table-block {
+            background: var(--card-bg);
+            border-radius: 0.75rem;
+            border: 1px solid var(--border);
+            padding: 1.5rem;
+            overflow-x: auto;
+        }
+        .table-block h2 {
+            font-size: 1.1rem;
+            margin-bottom: 1rem;
+            color: var(--text-primary);
+        }
+        .table-block table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.875rem;
+        }
+        .table-block th {
+            text-align: left;
+            color: var(--text-secondary);
+            font-weight: 600;
+            padding: 0.75rem;
+            border-bottom: 2px solid var(--border);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            white-space: nowrap;
+        }
+        .table-block td {
+            padding: 0.75rem;
+            border-bottom: 1px solid var(--border);
+            white-space: nowrap;
+        }
+        .table-block tr:last-child td { border-bottom: none; }
 
         .tag-order { background: #38bdf822; color: #38bdf8; padding: 0.1rem 0.3rem; border-radius: 0.25rem; font-weight: 700; margin-right: 0.4rem; font-size: 0.7rem; }
         .tag-closed { background: #f59e0b22; color: #f59e0b; padding: 0.1rem 0.3rem; border-radius: 0.25rem; font-weight: 700; margin-right: 0.4rem; font-size: 0.7rem; }
@@ -291,6 +340,10 @@
             </div>
             <div class="stats-container">
                 <div class="balance-card">
+                    <div class="balance-label">Mode</div>
+                    <div class="balance-value" id="mode-display" style="color: var(--accent); cursor: pointer;" onclick="toggleMode()">--</div>
+                </div>
+                <div class="balance-card">
                     <div class="balance-label">Total ROI</div>
                     <div class="balance-value" id="total-roi">0.00%</div>
                 </div>
@@ -312,6 +365,8 @@
                     <button onclick="controlBot('start')" style="background: var(--success); color: white; border: none; padding: 0.5rem; border-radius: 0.25rem; cursor: pointer;">Start Bot</button>
                     <button onclick="controlBot('stop')" style="background: var(--danger); color: white; border: none; padding: 0.5rem; border-radius: 0.25rem; cursor: pointer;">Stop Bot</button>
                     <button onclick="toggleMode()" style="background: var(--accent); color: var(--bg-color); border: none; padding: 0.5rem; border-radius: 0.25rem; cursor: pointer; font-weight:700;">Toggle Trend/Reversal</button>
+                    <button onclick="toggleTrendFlipPause()" style="background: #ef4444; color: white; border: none; padding: 0.5rem; border-radius: 0.25rem; cursor: pointer; font-weight:700;">Toggle Trend Flip Pause</button>
+                    <button onclick="document.getElementById('settings-modal').style.display='flex'" style="background: #555; color: white; border: none; padding: 0.5rem; border-radius: 0.25rem; cursor: pointer;">Settings</button>
                 </div>
 
                 <h3>Live Stats</h3>
@@ -330,6 +385,17 @@
                     <li class="coin-item" data-pair="SOL/USDT">SOL/USDT</li>
                     <li class="coin-item" data-pair="ADA/USDT">ADA/USDT</li>
                     <li class="coin-item" data-pair="DOGE/USDT">DOGE/USDT</li>
+                    <li class="coin-item" data-pair="XRP/USDT">XRP/USDT</li>
+                    <li class="coin-item" data-pair="BNB/USDT">BNB/USDT</li>
+                    <li class="coin-item" data-pair="LINK/USDT">LINK/USDT</li>
+                    <li class="coin-item" data-pair="DOT/USDT">DOT/USDT</li>
+                    <li class="coin-item" data-pair="AVAX/USDT">AVAX/USDT</li>
+                    <li class="coin-item" data-pair="LTC/USDT">LTC/USDT</li>
+                    <li class="coin-item" data-pair="TRX/USDT">TRX/USDT</li>
+                    <li class="coin-item" data-pair="MATIC/USDT">MATIC/USDT</li>
+                    <li class="coin-item" data-pair="NEAR/USDT">NEAR/USDT</li>
+                    <li class="coin-item" data-pair="FIL/USDT">FIL/USDT</li>
+                    <li class="coin-item" data-pair="ATOM/USDT">ATOM/USDT</li>
                 </ul>
             </aside>
             <main>
@@ -363,25 +429,24 @@
                     </div>
                 </section>
 
-        <div class="side-by-side">
-            <section style="margin-bottom: 0;">
-                <h2 style="margin-bottom: 1rem; font-size: 1.25rem;">Active Positions</h2>
-                <div id="positions-grid" style="display: grid; grid-template-columns: 1fr; gap: 1rem;">
-                    <!-- Positions will be injected here -->
-                </div>
-            </section>
-
-            <section class="history-section" style="max-height: 600px; overflow-y: auto;">
-                <h2 style="margin-bottom: 1rem; font-size: 1.25rem;">Recent Activity</h2>
-                <div class="history-list" id="history-list">
-                    <!-- History will be injected here -->
-                </div>
-            </section>
+        <!-- ── Active Positions: own full-width row, fixed-width cards ── -->
+        <div class="positions-row">
+            <h2>Active Positions</h2>
+            <div id="positions-grid">
+                <!-- Cards injected here — each gets class="position-card" -->
+            </div>
         </div>
 
-        <section class="performance-container">
-            <h2 style="margin-bottom: 1rem; font-size: 1.25rem;">24-Hour Token Performance</h2>
-            <div class="trades-table-container" style="margin-bottom: 0;">
+        <!-- ── Tables: full-width aligned stack ── -->
+        <div class="tables-section">
+
+            <div class="table-block">
+                <h2>Recent Activity</h2>
+                <div class="history-list" id="history-list" style="font-family:'Fira Code',monospace; font-size:0.8rem;"></div>
+            </div>
+
+            <div class="table-block">
+                <h2>24-Hour Token Performance</h2>
                 <table>
                     <thead>
                         <tr>
@@ -392,16 +457,12 @@
                             <th>Best Signal</th>
                         </tr>
                     </thead>
-                    <tbody id="performance-body">
-                        <!-- Performance data will be injected here -->
-                    </tbody>
+                    <tbody id="performance-body"></tbody>
                 </table>
             </div>
-        </section>
 
-        <section>
-            <h2 style="margin-bottom: 1rem; font-size: 1.25rem;">Past Trades</h2>
-            <div class="trades-table-container">
+            <div class="table-block">
+                <h2>Past Trades</h2>
                 <table id="trades-table">
                     <thead>
                         <tr>
@@ -413,16 +474,12 @@
                             <th>Balance</th>
                         </tr>
                     </thead>
-                    <tbody id="trades-body">
-                        <!-- Trades will be injected here -->
-                    </tbody>
+                    <tbody id="trades-body"></tbody>
                 </table>
             </div>
-        </section>
 
-        <section>
-            <h2 style="margin-bottom: 1rem; font-size: 1.25rem;">Daily Bot Activity</h2>
-            <div class="trades-table-container">
+            <div class="table-block">
+                <h2>Daily Bot Activity</h2>
                 <table>
                     <thead>
                         <tr>
@@ -432,22 +489,68 @@
                             <th>Net PnL</th>
                         </tr>
                     </thead>
-                    <tbody id="uptime-body">
-                        <!-- Uptime stats will be injected here -->
-                    </tbody>
+                    <tbody id="uptime-body"></tbody>
                 </table>
             </div>
-        </section>
+
+        </div>
         </main>
         </div>
     </div>
 
+    <div id="settings-modal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.8); z-index:1000; justify-content:center; align-items:center;">
+        <div style="background:var(--bg-color); padding:2rem; border-radius:0.5rem; width:400px; color:var(--text-primary);">
+            <h2>Bot Settings</h2>
+            <div style="display:grid; gap:1rem; margin-top:1rem;">
+                <label>SL %: <input type="number" id="cfg-sl" step="0.0001"></label>
+                <label>TP %: <input type="number" id="cfg-tp" step="0.0001"></label>
+                <label>Risk %: <input type="number" id="cfg-risk" step="0.01"></label>
+                <label>Trail Step %: <input type="number" id="cfg-trail" step="0.01"></label>
+            </div>
+            <div style="margin-top:2rem; display:flex; gap:1rem;">
+                <button onclick="saveSettings()">Save & Apply</button>
+                <button onclick="closeSettings()">Cancel</button>
+            </div>
+        </div>
+    </div>
+
     <script>
+        // FIX: these globals were missing — currentPair, chartInterval, chartData, and globalData
+        // are all referenced throughout the script but were never declared, causing ReferenceErrors
+        // whenever any function ran before the variable happened to be set by a callback.
+        let currentPair   = 'ALL';
+        let chartInterval = null;
+        let chartData     = null;
+        let globalData    = null;
+
+        function closeSettings() {
+            document.getElementById('settings-modal').style.display = 'none';
+        }
+        async function saveSettings() {
+            // FIX: was sending 'riskPercentPerTrade' (not in server allowlist) and raw string values.
+            // Now sends only keys that server.js ALLOWED_CONFIG_KEYS accepts, as numbers.
+            const slVal    = parseFloat(document.getElementById('cfg-sl').value);
+            const tpVal    = parseFloat(document.getElementById('cfg-tp').value);
+            const trailVal = parseFloat(document.getElementById('cfg-trail').value);
+            const payload  = { action: 'updateConfig' };
+            if (!isNaN(slVal)    && slVal > 0)    payload.stopLossPercent  = slVal;
+            if (!isNaN(tpVal)    && tpVal > 0)    payload.takeProfitPercent = tpVal;
+            if (!isNaN(trailVal) && trailVal > 0) payload.trailStepPct     = trailVal;
+            await sendControl(payload);
+            closeSettings();
+            showToast('Settings Saved', 'success');
+        }
+
         let currentMode = 'trend';
         async function toggleMode() {
             currentMode = currentMode === 'trend' ? 'reversal' : 'trend';
             await sendControl({ action: 'toggleMode', value: currentMode });
             showToast(`Strategy mode set to: ${currentMode.toUpperCase()}`, 'success');
+        }
+
+        async function toggleTrendFlipPause() {
+            const result = await sendControl({ action: 'toggleTrendFlipPause' });
+            showToast(result.status, 'success');
         }
 
         // ── Pair selector ──────────────────────────────────────────────────
@@ -712,9 +815,15 @@
 
         async function fetchData() {
             try {
-                const response = await fetch('/api/data');
-                globalData = await response.json();
-                updateUI(globalData, true); // Pass true to allow chart updates
+                const [dataRes, modeRes] = await Promise.all([
+                    fetch('/api/data'),
+                    fetch('/api/mode')
+                ]);
+                const data = await dataRes.json();
+                const modeData = await modeRes.json();
+                
+                document.getElementById('mode-display').textContent = modeData.mode.toUpperCase();
+                updateUI(data, true);
             } catch (error) {
                 console.error('Error fetching data:', error);
             }
@@ -828,7 +937,7 @@
             // Update Positions
             const grid = document.getElementById('positions-grid');
             if (data.positions.length === 0) {
-                grid.innerHTML = '<div style="color: var(--text-secondary); padding: 2rem; text-align: center; grid-column: 1/-1;">No active positions</div>';
+                grid.innerHTML = '<div style="color: var(--text-secondary); padding: 2rem; text-align: center; width:100%;">No active positions</div>';
             } else {
                 grid.innerHTML = data.positions.map(pos => {
                     const distToTp   = Math.abs(pos.currentPrice - pos.takeProfitPrice);
@@ -837,9 +946,15 @@
                     const priceColor = closerToTp ? 'var(--success)' : 'var(--danger)';
 
                     // ── Trailing tier display ──────────────────────────────
+                    // FIX: breakevenActive is now a separate boolean — trailTier is never -1 anymore.
                     const tier = pos.trailTier || 0;
+                    const isBE = pos.breakevenActive || false;
                     const tierLabels = { 0: null, 1: '🎯 TIER 1 ACTIVE', 2: '🚀 TIER 2 ACTIVE' };
                     const tierColors = { 0: null, 1: '#f59e0b', 2: '#a855f7' };
+                    const beBadge  = isBE && tier === 0 ? `
+                        <div style="background:#22c55e22; border:1px solid #22c55e55; border-radius:0.35rem; padding:0.35rem 0.6rem; margin-bottom:0.75rem; text-align:center; font-size:0.75rem; font-weight:700; color:#22c55e; letter-spacing:0.05em;">
+                            🔒 BREAKEVEN LOCKED
+                        </div>` : '';
                     const tierBadge  = tier > 0 ? `
                         <div style="background:${tierColors[tier]}22; border:1px solid ${tierColors[tier]}55; border-radius:0.35rem; padding:0.35rem 0.6rem; margin-bottom:0.75rem; text-align:center; font-size:0.75rem; font-weight:700; color:${tierColors[tier]}; letter-spacing:0.05em;">
                             ${tierLabels[tier]} — Trailing Stop Ladder
@@ -872,12 +987,13 @@
                     const minsOpen   = isNaN(openedMs) ? '—' : Math.floor((Date.now() - openedMs) / 60000) + 'm';
 
                     return `
-                    <div class="card" style="border-top: 4px solid ${priceColor}">
+                    <div class="position-card" style="border-top: 4px solid ${priceColor}">
                         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.75rem;">
                             <span class="pos-badge ${pos.direction === 'LONG' ? 'badge-long' : 'badge-short'}">${pos.direction}</span>
                             <span style="font-size:0.75rem; color:var(--text-secondary);">⏱ ${minsOpen}</span>
                         </div>
                         <h2 style="margin-bottom:0.75rem;">${pos.pair}</h2>
+                        ${beBadge}
                         ${tierBadge}
 
                         <!-- Live exit preview box -->
@@ -985,3 +1101,4 @@
     </script>
 </body>
 </html>
+

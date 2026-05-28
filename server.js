@@ -1,6 +1,6 @@
 /**
  * File: server.js
- * Version: 2.9.1
+ * Version: 3.0.0
  * Fixes: manual long/short/exit buttons (body parsed once, shared),
  *        Termux notifications on all trade events,
  *        resilient per-pair ticker fetch (no bulk endpoint)
@@ -15,7 +15,7 @@ const ccxt  = require('ccxt');
 const { execSync, exec } = require('child_process');
 
 const PORT  = 3000;
-const PAIRS = ['BTC-USDT', 'ETH-USDT', 'SOL-USDT', 'ADA-USDT', 'DOGE-USDT'];
+const PAIRS = ['BTC-USDT', 'ETH-USDT', 'SOL-USDT', 'ADA-USDT', 'DOGE-USDT', 'XRP-USDT', 'BNB-USDT', 'LINK-USDT', 'DOT-USDT', 'AVAX-USDT', 'LTC-USDT', 'TRX-USDT', 'MATIC-USDT', 'NEAR-USDT', 'FIL-USDT', 'ATOM-USDT'];
 
 const exchange = new ccxt.weex({ enableRateLimit: true, timeout: 8000 });
 
@@ -92,6 +92,15 @@ function calculateStandardDeviation(prices, mean) {
     const squareDiffs = prices.map(p => Math.pow(p - mean, 2));
     return Math.sqrt(squareDiffs.reduce((acc, val) => acc + val, 0) / prices.length);
 }
+
+// ─── Per-pair timeframe map (must match scalper_machine.js TOKEN_CONFIGS) ─────
+const PAIR_TIMEFRAME_MAP = {
+    'BTC/USDT': '15m', 'ETH/USDT': '15m', 'SOL/USDT': '5m',
+    'ADA/USDT': '5m', 'DOGE/USDT': '30m', 'XRP/USDT': '30m',
+    'BNB/USDT': '15m', 'LINK/USDT': '30m', 'DOT/USDT': '15m', 'AVAX/USDT': '30m',
+    'LTC/USDT': '15m', 'TRX/USDT': '15m', 'MATIC/USDT': '15m', 'NEAR/USDT': '15m',
+    'FIL/USDT': '15m', 'ATOM/USDT': '15m'
+};
 
 // ─── HTTP server ──────────────────────────────────────────────────────────────
 const server = http.createServer(async (req, res) => {
@@ -226,12 +235,6 @@ const server = http.createServer(async (req, res) => {
     }
 
     // ── Candles API ──────────────────────────────────────────────────────────
-const PAIR_TIMEFRAME_MAP = {
-    'BTC/USDT': '15m', 'ETH/USDT': '15m', 'SOL/USDT': '5m',
-    'ADA/USDT': '5m', 'DOGE/USDT': '30m', 'XRP/USDT': '30m',
-    'BNB/USDT': '15m', 'LINK/USDT': '30m', 'DOT/USDT': '15m', 'AVAX/USDT': '30m'
-};
-
     if (req.url.startsWith('/api/candles/')) {
         const urlParts = req.url.split('?');
         const pairPath = urlParts[0].split('/api/candles/')[1];
@@ -284,6 +287,20 @@ const PAIR_TIMEFRAME_MAP = {
         return;
     }
 
+    // ── Get Active Mode ──────────────────────────────────────────────────────────
+    if (req.url === '/api/mode' && req.method === 'GET') {
+        let mode = 'trend';
+        try {
+            if (fs.existsSync('./mode.json')) {
+                const data = JSON.parse(fs.readFileSync('./mode.json', 'utf8'));
+                mode = data.mode;
+            }
+        } catch (_) {}
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ mode }));
+        return;
+    }
+
     // ── Control API ──────────────────────────────────────────────────────────
     if (req.url === '/api/control') {
         // Collect full body first, then parse ONCE
@@ -328,6 +345,73 @@ const PAIR_TIMEFRAME_MAP = {
                 notify('🚪 Manual EXIT', `${pair} manual exit queued`, 'scalper_manual');
                 res.writeHead(200);
                 res.end(JSON.stringify({ status: `Manual EXIT queued for ${pair}` }));
+                return;
+            }
+
+            // ── Update Bot Configuration ──────────────────────────────────
+            if (action === 'toggleMode') {
+                const mode = payload.value;
+                if (mode !== 'trend' && mode !== 'reversal') {
+                    res.writeHead(400); res.end(JSON.stringify({ error: 'Invalid mode' })); return;
+                }
+                const configPath = 'scalper_machine.js';
+                let content = fs.readFileSync(configPath, 'utf8');
+                content = content.replace(/signalMode:\s*'\w+'/, `signalMode: '${mode}'`);
+                fs.writeFileSync(configPath, content);
+                notify('🔄 Mode Switched', `Bot mode changed to ${mode}`, 'scalper_control');
+                res.writeHead(200);
+                res.end(JSON.stringify({ status: `Mode switched to ${mode}` }));
+                return;
+            }
+
+            if (action === 'toggleTrendFlipPause') {
+                const pauseFile = 'trend_flip_pause.json';
+                let isPaused = false;
+                if (fs.existsSync(pauseFile)) {
+                    isPaused = JSON.parse(fs.readFileSync(pauseFile, 'utf8')).paused;
+                }
+                const newPaused = !isPaused;
+                fs.writeFileSync(pauseFile, JSON.stringify({ paused: newPaused }));
+                notify('🛡️ Trend Flip', `Trend flip is now ${newPaused ? 'PAUSED' : 'ACTIVE'}`, 'scalper_control');
+                res.writeHead(200);
+                res.end(JSON.stringify({ status: `Trend flip ${newPaused ? 'paused' : 'resumed'}` }));
+                return;
+            }
+
+            if (action === 'updateConfig') {
+                const configPath = 'scalper_machine.js';
+                let content = fs.readFileSync(configPath, 'utf8');
+                
+                // FIX: Previous regex `key:\s*[0-9\.]+` would match partial key names
+                // (e.g. "sl" would match "smaSlow", corrupting the file silently).
+                // Now uses word boundaries (\b) and only allows the known safe CONFIG keys.
+                const ALLOWED_CONFIG_KEYS = new Set([
+                    'fixedPositionSizeUSDT', 'leverageMultiplier', 'stopLossPercent',
+                    'takeProfitPercent', 'rsiOversold', 'rsiOverbought', 'volaMultiplier',
+                    'nearSmaThreshold', 'minSlopeThreshold', 'maxConcurrentSameDirection',
+                    'cooldownBlocksBase', 'cooldownBlocksMax', 'fastBreakevenPct',
+                    'trailStepPct', 'trailSlStepPct', 'trailTpBumpPct', 'takerFeeRate'
+                ]);
+
+                for (const [key, value] of Object.entries(payload)) {
+                    if (key === 'action') continue;
+                    if (!ALLOWED_CONFIG_KEYS.has(key)) {
+                        console.warn(`[CONFIG] Rejected unknown key: ${key}`);
+                        continue;
+                    }
+                    if (typeof value !== 'number' || !isFinite(value)) {
+                        console.warn(`[CONFIG] Rejected non-numeric value for key: ${key}`);
+                        continue;
+                    }
+                    // Word-boundary anchored regex — prevents partial key matches
+                    const regex = new RegExp(`\\b(${key}:\\s*)[0-9.]+`);
+                    content = content.replace(regex, `$1${value}`);
+                }
+                
+                fs.writeFileSync(configPath, content);
+                notify('⚙️ Configuration Updated', 'Settings applied to scalper engine', 'scalper_ctrl');
+                res.writeHead(200);
+                res.end(JSON.stringify({ status: 'Config updated' }));
                 return;
             }
 

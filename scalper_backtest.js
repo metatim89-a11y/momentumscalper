@@ -7,15 +7,15 @@
 const ccxt = require('ccxt');
 
 const CONFIG = {
-    targetPairs: ['BTC/USDT', 'ETH/USDT', 'SOL/USDT'],
+    targetPairs: ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'ADA/USDT', 'DOGE/USDT', 'LTC/USDT', 'TRX/USDT', 'MATIC/USDT', 'NEAR/USDT', 'FIL/USDT', 'ATOM/USDT'],
     timeframe: '1m',
     fetchLimit: 5000,
     smaWindowSize: 30,         
-    volaMultiplier: 2.0,       
-    stopLossPercent: 0.0026,   // 0.26%
-    takeProfitPercent: 0.0074, // 0.74%
+    volaMultiplier: 1.2,       
+    stopLossPercent: 0.0030,   // 0.30%
+    takeProfitPercent: 0.0100, // 1.00%
     takerFeeRate: 0.0006,
-    startingWalletUSDT: 1000.00,
+    startingWalletUSDT: 300.00,
     riskPercentPerTrade: 0.10,
     leverage: 3
 };
